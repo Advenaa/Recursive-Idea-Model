@@ -52,6 +52,10 @@ Python version policy:
 - Required: Python `3.14.x`
 - Recommended baseline: Python `3.14.3` (latest stable line as of February 14, 2026)
 
+CI:
+
+- GitHub Actions workflow at `.github/workflows/ci.yml` runs compile + test on push/PR.
+
 Run API:
 
 ```bash
@@ -65,6 +69,7 @@ curl -s -X POST "http://127.0.0.1:8000/analyze" \
   -H "Content-Type: application/json" \
   -d '{"idea":"Build an AI CFO for freelancers","mode":"deep"}'
 
+curl -s "http://127.0.0.1:8000/runs?limit=10&status=completed"
 curl -s "http://127.0.0.1:8000/runs/<run_id>"
 curl -s "http://127.0.0.1:8000/runs/<run_id>/logs"
 curl -s -X POST "http://127.0.0.1:8000/runs/<run_id>/feedback" \
@@ -85,6 +90,7 @@ Run CLI:
 ```bash
 rim health
 rim analyze --idea "Your idea here" --mode deep --json
+rim run list --limit 10 --status completed
 rim run logs <run_id>
 rim run feedback <run_id> --verdict accept --notes "Strong output"
 rim eval run --mode deep --limit 3

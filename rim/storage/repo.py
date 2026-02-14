@@ -357,6 +357,45 @@ class RunRepository:
         ).fetchall()
         return [str(row["id"]) for row in rows]
 
+    def list_runs(
+        self,
+        *,
+        status: str | None = None,
+        mode: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        where: list[str] = []
+        params: list[object] = []
+
+        if status:
+            where.append("status = ?")
+            params.append(str(status).strip().lower())
+        if mode:
+            where.append("mode = ?")
+            params.append(str(mode).strip().lower())
+
+        sql = """
+            SELECT
+                id,
+                mode,
+                input_idea,
+                status,
+                created_at,
+                completed_at,
+                confidence_score,
+                error_summary
+            FROM runs
+        """
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = self.conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
     def submit_run_feedback(
         self,
         run_id: str,

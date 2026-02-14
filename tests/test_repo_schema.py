@@ -147,6 +147,43 @@ def test_pending_runs_and_request_roundtrip(tmp_path: Path) -> None:
     assert req["idea"] == "idea 1"
 
 
+def test_list_runs_filters_and_pagination(tmp_path: Path) -> None:
+    db_path = tmp_path / "rim_test.db"
+    repo = RunRepository(db_path=db_path)
+    repo.create_run_with_request(
+        run_id="run-a",
+        mode="deep",
+        input_idea="idea a",
+        request_json='{"idea":"idea a","mode":"deep"}',
+        status="completed",
+    )
+    repo.create_run_with_request(
+        run_id="run-b",
+        mode="fast",
+        input_idea="idea b",
+        request_json='{"idea":"idea b","mode":"fast"}',
+        status="failed",
+    )
+    repo.create_run_with_request(
+        run_id="run-c",
+        mode="deep",
+        input_idea="idea c",
+        request_json='{"idea":"idea c","mode":"deep"}',
+        status="queued",
+    )
+
+    deep_only = repo.list_runs(mode="deep", limit=10, offset=0)
+    assert [row["id"] for row in deep_only] == ["run-c", "run-a"]
+
+    failed_only = repo.list_runs(status="failed", limit=10, offset=0)
+    assert [row["id"] for row in failed_only] == ["run-b"]
+
+    page_one = repo.list_runs(limit=2, offset=0)
+    page_two = repo.list_runs(limit=2, offset=2)
+    assert [row["id"] for row in page_one] == ["run-c", "run-b"]
+    assert [row["id"] for row in page_two] == ["run-a"]
+
+
 def test_feedback_updates_memory_scores_and_creates_feedback_entry(tmp_path: Path) -> None:
     db_path = tmp_path / "rim_test.db"
     repo = RunRepository(db_path=db_path)

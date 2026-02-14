@@ -249,11 +249,20 @@ Behavior:
 4. Returns `{ run_id, status }` with HTTP 202 when `wait=false`.
 5. When `wait=true`, blocks until completion and returns full run payload.
 
-### 7.2 `GET /runs/{run_id}`
+### 7.2 `GET /runs`
+
+Returns recent runs with optional filters:
+
+1. `status` (`queued|running|completed|failed|partial`)
+2. `mode` (`deep|fast`)
+3. `limit` (default `20`, max `200`)
+4. `offset` (default `0`)
+
+### 7.3 `GET /runs/{run_id}`
 
 Returns persisted run state and final output.
 
-### 7.3 `GET /health`
+### 7.4 `GET /health`
 
 Returns:
 
@@ -262,7 +271,7 @@ Returns:
 3. `codex` adapter health,
 4. `claude` adapter health.
 
-### 7.4 `GET /runs/{run_id}/logs`
+### 7.5 `GET /runs/{run_id}/logs`
 
 Returns ordered stage telemetry for the run:
 
@@ -272,7 +281,7 @@ Returns ordered stage telemetry for the run:
 4. status,
 5. stage metadata (including decomposition stop reason when applicable).
 
-### 7.5 `POST /runs/{run_id}/feedback`
+### 7.6 `POST /runs/{run_id}/feedback`
 
 Request JSON:
 
@@ -306,6 +315,8 @@ Flags:
 ### 8.2 Run Inspection
 
 `rim run show <run_id>`
+
+`rim run list --limit 20 --status completed`
 
 ### 8.3 Healthcheck
 
@@ -447,4 +458,4 @@ RIM/
 3. Deep mode is default in both API and CLI paths.
 4. Both `codex` and `claude` CLI adapters are implemented and health-checkable.
 5. Failure of one provider can fall back to the other for at least one retry.
-6. Run artifacts are persisted and retrievable via `GET /runs/{run_id}`.
+6. Run artifacts are persisted and retrievable via `GET /runs` and `GET /runs/{run_id}`.

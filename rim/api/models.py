@@ -8,6 +8,8 @@ from rim.core.schemas import (
     AnalyzeRunResponse,
     HealthResponse,
     RunLogsResponse,
+    RunSummary,
+    RunListResponse,
 )
 
 __all__ = [
@@ -18,4 +20,6 @@ __all__ = [
     "AnalyzeRunResponse",
     "HealthResponse",
     "RunLogsResponse",
+    "RunSummary",
+    "RunListResponse",
 ]

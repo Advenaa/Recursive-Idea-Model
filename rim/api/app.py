@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Literal
+
 from fastapi import FastAPI, HTTPException, Query, Response
 
 from rim.api.job_queue import RunJobQueue
@@ -10,12 +14,11 @@ from rim.core.schemas import (
     HealthResponse,
     RunFeedbackRequest,
     RunFeedbackResponse,
+    RunListResponse,
     RunLogsResponse,
 )
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
-
-app = FastAPI(title="RIM MVP", version="0.1.0")
 
 repository = RunRepository()
 router = ProviderRouter()
@@ -23,14 +26,16 @@ orchestrator = RimOrchestrator(repository=repository, router=router)
 job_queue = RunJobQueue(orchestrator=orchestrator, repository=repository)
 
 
-@app.on_event("startup")
-async def startup_event() -> None:
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await job_queue.start()
+    try:
+        yield
+    finally:
+        await job_queue.stop()
 
 
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    await job_queue.stop()
+app = FastAPI(title="RIM MVP", version="0.1.0", lifespan=_lifespan)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -58,6 +63,23 @@ async def analyze(
 
     response.status_code = 202
     return AnalyzeRunResponse(run_id=run_id, status="queued", result=None, error_summary=None)
+
+
+@app.get("/runs", response_model=RunListResponse)
+async def list_runs(
+    status: Literal["queued", "running", "completed", "failed", "partial"] | None = Query(
+        default=None
+    ),
+    mode: Literal["deep", "fast"] | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> RunListResponse:
+    return orchestrator.list_runs(
+        status=status,
+        mode=mode,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.get("/runs/{run_id}", response_model=AnalyzeRunResponse)

@@ -54,6 +54,26 @@ class AnalyzeRunResponse(BaseModel):
     error_summary: str | None = None
 
 
+class RunSummary(BaseModel):
+    run_id: str
+    mode: Literal["deep", "fast"]
+    input_idea: str
+    status: Literal["queued", "running", "completed", "failed", "partial"]
+    created_at: str
+    completed_at: str | None = None
+    confidence_score: float | None = None
+    error_summary: str | None = None
+
+
+class RunListResponse(BaseModel):
+    runs: list[RunSummary]
+    count: int
+    limit: int
+    offset: int
+    status: str | None = None
+    mode: str | None = None
+
+
 class StageLogEntry(BaseModel):
     stage: str
     provider: str | None = None

@@ -63,6 +63,18 @@ def _cmd_run_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run_list(args: argparse.Namespace) -> int:
+    orchestrator = _build_orchestrator()
+    payload = orchestrator.list_runs(
+        status=args.status,
+        mode=args.mode,
+        limit=args.limit,
+        offset=args.offset,
+    )
+    print(json.dumps(payload.model_dump(), indent=2))
+    return 0
+
+
 def _cmd_run_logs(args: argparse.Namespace) -> int:
     orchestrator = _build_orchestrator()
     run = orchestrator.get_run(args.run_id)
@@ -222,6 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="Inspect runs")
     run_sub = run.add_subparsers(dest="run_command", required=True)
+    run_list = run_sub.add_parser("list", help="List runs")
+    run_list.add_argument("--status", choices=["queued", "running", "completed", "failed", "partial"])
+    run_list.add_argument("--mode", choices=["deep", "fast"])
+    run_list.add_argument("--limit", type=int, default=20)
+    run_list.add_argument("--offset", type=int, default=0)
     run_show = run_sub.add_parser("show", help="Show run details")
     run_show.add_argument("run_id")
     run_logs = run_sub.add_parser("logs", help="Show stage telemetry logs")
@@ -282,6 +299,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command == "run" and args.run_command == "list":
+        raise SystemExit(_cmd_run_list(args))
     if args.command == "analyze":
         raise SystemExit(asyncio.run(_cmd_analyze(args)))
     if args.command == "run" and args.run_command == "show":

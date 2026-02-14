@@ -11,6 +11,8 @@ from rim.core.modes import get_mode_settings
 from rim.core.schemas import (
     AnalyzeRequest,
     AnalyzeResult,
+    RunListResponse,
+    RunSummary,
     AnalyzeRunResponse,
     CriticFinding,
     RunLogsResponse,
@@ -254,6 +256,42 @@ class RimOrchestrator:
             status=payload["status"],
             error_summary=payload.get("error_summary"),
             result=result,
+        )
+
+    def list_runs(
+        self,
+        *,
+        status: str | None = None,
+        mode: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> RunListResponse:
+        rows = self.repository.list_runs(
+            status=status,
+            mode=mode,
+            limit=limit,
+            offset=offset,
+        )
+        items = [
+            RunSummary(
+                run_id=str(row["id"]),
+                mode=str(row["mode"]),
+                input_idea=str(row["input_idea"]),
+                status=str(row["status"]),
+                created_at=str(row["created_at"]),
+                completed_at=row.get("completed_at"),
+                confidence_score=row.get("confidence_score"),
+                error_summary=row.get("error_summary"),
+            )
+            for row in rows
+        ]
+        return RunListResponse(
+            runs=items,
+            count=len(items),
+            limit=max(1, min(int(limit), 200)),
+            offset=max(0, int(offset)),
+            status=status,
+            mode=mode,
         )
 
     def get_run_logs(self, run_id: str) -> RunLogsResponse:
