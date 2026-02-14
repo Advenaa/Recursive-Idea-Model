@@ -15,6 +15,7 @@ from rim.eval.runner import (
     list_reports,
     load_report,
     run_benchmark,
+    run_duel_benchmark,
     run_single_pass_baseline,
     save_report,
 )
@@ -115,6 +116,38 @@ async def _cmd_eval_run(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_eval_duel(args: argparse.Namespace) -> int:
+    orchestrator = _build_orchestrator()
+    dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
+    result = await run_duel_benchmark(
+        orchestrator=orchestrator,
+        dataset_path=dataset,
+        mode=args.mode,
+        limit=args.limit,
+        min_quality_delta=args.min_quality_delta,
+        max_runtime_delta_sec=args.max_runtime_delta_sec,
+        min_shared_runs=args.min_shared_runs,
+    )
+    baseline_path = save_report(
+        result["baseline"],
+        Path(args.save_baseline) if args.save_baseline else None,
+    )
+    target_path = save_report(
+        result["target"],
+        Path(args.save_target) if args.save_target else None,
+    )
+    payload = {
+        "baseline_report": str(baseline_path),
+        "target_report": str(target_path),
+        "comparison": result["comparison"],
+        "gate": result["gate"],
+    }
+    if args.save:
+        Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    return 0 if result["gate"]["passed"] else 2
+
+
 def _cmd_eval_list(_args: argparse.Namespace) -> int:
     reports = [str(path) for path in list_reports(DEFAULT_REPORTS_DIR)]
     print(json.dumps({"reports": reports}, indent=2))
@@ -205,6 +238,19 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument("--mode", choices=["deep", "fast"], default="deep")
     eval_run.add_argument("--limit", type=int)
     eval_run.add_argument("--save")
+    eval_duel = eval_sub.add_parser(
+        "duel",
+        help="Run baseline + benchmark comparison + regression gate",
+    )
+    eval_duel.add_argument("--dataset")
+    eval_duel.add_argument("--mode", choices=["deep", "fast"], default="deep")
+    eval_duel.add_argument("--limit", type=int)
+    eval_duel.add_argument("--save")
+    eval_duel.add_argument("--save-baseline")
+    eval_duel.add_argument("--save-target")
+    eval_duel.add_argument("--min-quality-delta", type=float, default=0.0)
+    eval_duel.add_argument("--max-runtime-delta-sec", type=float)
+    eval_duel.add_argument("--min-shared-runs", type=int, default=1)
     eval_sub.add_parser("list", help="List saved benchmark reports")
     eval_baseline = eval_sub.add_parser(
         "baseline",
@@ -246,6 +292,8 @@ def main() -> None:
         raise SystemExit(_cmd_run_feedback(args))
     if args.command == "eval" and args.eval_command == "run":
         raise SystemExit(asyncio.run(_cmd_eval_run(args)))
+    if args.command == "eval" and args.eval_command == "duel":
+        raise SystemExit(asyncio.run(_cmd_eval_duel(args)))
     if args.command == "eval" and args.eval_command == "list":
         raise SystemExit(_cmd_eval_list(args))
     if args.command == "eval" and args.eval_command == "baseline":

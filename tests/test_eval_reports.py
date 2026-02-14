@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 
 from rim.core.schemas import AnalyzeResult, DecompositionNode
+from rim.eval import runner
 from rim.eval.runner import (
     compare_reports,
     evaluate_regression_gate,
     run_benchmark,
+    run_duel_benchmark,
     run_single_pass_baseline,
+    save_report,
 )
 
 
@@ -176,3 +179,34 @@ def test_compare_reports_ignores_failed_runs() -> None:
     diff = compare_reports(base, target)
     assert diff["shared_run_count"] == 1
     assert diff["run_deltas"][0]["id"] == "a"
+
+
+def test_run_duel_benchmark_outputs_comparison_and_gate(tmp_path) -> None:  # noqa: ANN001
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text('{"id":"ok-1","idea":"first idea"}\n', encoding="utf-8")
+    payload = asyncio.run(
+        run_duel_benchmark(
+            orchestrator=MixedOutcomeOrchestrator(),
+            dataset_path=dataset,
+            mode="deep",
+            min_quality_delta=0.0,
+            min_shared_runs=1,
+        )
+    )
+    assert payload["baseline"]["mode"] == "single_pass_baseline"
+    assert payload["target"]["mode"] == "deep"
+    assert payload["comparison"]["shared_run_count"] == 1
+    assert payload["gate"]["passed"] is True
+
+
+def test_save_report_auto_paths_are_unique(tmp_path) -> None:  # noqa: ANN001
+    report = {"created_at": "2026-02-14T00:00:00Z", "runs": []}
+    original_reports_dir = runner.DEFAULT_REPORTS_DIR
+    runner.DEFAULT_REPORTS_DIR = tmp_path
+    try:
+        path_a = save_report(report)
+        path_b = save_report(report)
+    finally:
+        runner.DEFAULT_REPORTS_DIR = original_reports_dir
+
+    assert path_a != path_b

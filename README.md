@@ -89,6 +89,7 @@ rim run logs <run_id>
 rim run feedback <run_id> --verdict accept --notes "Strong output"
 rim eval run --mode deep --limit 3
 rim eval baseline --limit 3
+rim eval duel --mode deep --limit 3 --min-quality-delta 0.0
 rim eval list
 rim eval compare
 rim eval gate --min-quality-delta 0.0 --max-runtime-delta-sec 15

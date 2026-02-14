@@ -222,6 +222,40 @@ def run_single_pass_baseline(
     )
 
 
+async def run_duel_benchmark(
+    orchestrator: RimOrchestrator,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    mode: str = "deep",
+    limit: int | None = None,
+    min_quality_delta: float = 0.0,
+    max_runtime_delta_sec: float | None = None,
+    min_shared_runs: int = 1,
+) -> dict[str, Any]:
+    baseline = run_single_pass_baseline(
+        dataset_path=dataset_path,
+        limit=limit,
+    )
+    target = await run_benchmark(
+        orchestrator=orchestrator,
+        dataset_path=dataset_path,
+        mode=mode,
+        limit=limit,
+    )
+    comparison = compare_reports(base=baseline, target=target)
+    gate = evaluate_regression_gate(
+        comparison=comparison,
+        min_quality_delta=min_quality_delta,
+        max_runtime_delta_sec=max_runtime_delta_sec,
+        min_shared_runs=min_shared_runs,
+    )
+    return {
+        "baseline": baseline,
+        "target": target,
+        "comparison": comparison,
+        "gate": gate,
+    }
+
+
 def save_report(report: dict[str, Any], output_path: Path | None = None) -> Path:
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -229,7 +263,7 @@ def save_report(report: dict[str, Any], output_path: Path | None = None) -> Path
         return output_path
 
     DEFAULT_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     auto_path = DEFAULT_REPORTS_DIR / f"benchmark_{stamp}.json"
     auto_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return auto_path
