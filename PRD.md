@@ -253,7 +253,7 @@ Each run must return JSON with this minimum schema:
 ## 19) Post-MVP Roadmap (v0.2)
 
 - Replace heuristic scoring with a stronger domain-weighted rubric (done on February 14, 2026)
-- Finalize a canonical 20-idea benchmark pack and blind-review process
+- Finalize a canonical 20-idea benchmark pack and blind-review process (dataset complete on February 14, 2026)
 - Add explicit run cancel/retry controls in API and CLI (done on February 14, 2026)
 - Add richer evaluation analytics (domain-level trend and regression dashboards)
 

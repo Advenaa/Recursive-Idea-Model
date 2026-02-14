@@ -18,6 +18,11 @@ DOMAIN_RUBRIC_WEIGHTS = {
 }
 
 DOMAIN_ALIASES = {
+    "business": "enterprise",
+    "operations": "enterprise",
+    "product": "consumer",
+    "policy": "legal",
+    "research": "developer_tools",
     "fintech": "finance",
     "banking": "finance",
     "medical": "healthcare",

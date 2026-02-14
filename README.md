@@ -35,7 +35,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - Persistent API job queue (resume queued/running jobs on restart) (`rim/api/job_queue.py`)
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
 - SQLite persistence + memory context reuse (`rim/storage/`)
-- Benchmark runner + dataset (`rim/eval/`)
+- Benchmark runner + canonical 20-idea dataset (`rim/eval/`)
 - Domain-weighted benchmark scoring + domain trend deltas (`rim/eval/runner.py`)
 - Deterministic single-pass baseline + regression gate (`rim eval baseline`, `rim eval gate`)
 - Local CLI entrypoint (`rim/cli.py`)

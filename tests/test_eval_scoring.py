@@ -17,5 +17,7 @@ def test_weighted_quality_score_uses_domain_rubric() -> None:
 def test_rubric_domain_alias_resolution() -> None:
     assert resolve_rubric_domain("fintech") == "finance"
     assert resolve_rubric_domain("devtools") == "developer_tools"
+    assert resolve_rubric_domain("business") == "enterprise"
+    assert resolve_rubric_domain("policy") == "legal"
     assert resolve_rubric_domain("unknown-domain") == "general"
     assert rubric_weights("finance")["rigor"] == 0.52
