@@ -69,6 +69,11 @@ curl -s -X POST "http://127.0.0.1:8000/analyze" \
   -H "Content-Type: application/json" \
   -d '{"idea":"Build an AI CFO for freelancers","mode":"deep"}'
 
+# Idempotent run creation/retry by run_id
+curl -s -X POST "http://127.0.0.1:8000/analyze?run_id=demo-run-1" \
+  -H "Content-Type: application/json" \
+  -d '{"idea":"Build an AI CFO for freelancers","mode":"deep"}'
+
 curl -s "http://127.0.0.1:8000/runs?limit=10&status=completed"
 curl -s "http://127.0.0.1:8000/runs/<run_id>"
 curl -s "http://127.0.0.1:8000/runs/<run_id>/logs"
@@ -95,6 +100,7 @@ Run CLI:
 ```bash
 rim health
 rim analyze --idea "Your idea here" --mode deep --json
+rim analyze --idea "Your idea here" --mode deep --run-id demo-run-1 --json
 rim run list --limit 10 --status completed
 rim run logs <run_id>
 rim run feedback <run_id> --verdict accept --notes "Strong output"

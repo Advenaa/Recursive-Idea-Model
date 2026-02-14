@@ -124,8 +124,13 @@ class RimOrchestrator:
         self.repository = repository
         self.router = router
 
-    def create_run(self, request: AnalyzeRequest, status: str = "queued") -> str:
-        run_id = str(uuid4())
+    def create_run(
+        self,
+        request: AnalyzeRequest,
+        status: str = "queued",
+        run_id: str | None = None,
+    ) -> str:
+        run_id = str(run_id or uuid4())
         self.repository.create_run_with_request(
             run_id=run_id,
             mode=request.mode,
@@ -317,6 +322,15 @@ class RimOrchestrator:
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResult:
         run_id = self.create_run(request, status="running")
         return await self.execute_run(run_id, request)
+
+    def get_run_request(self, run_id: str) -> AnalyzeRequest | None:
+        payload = self.repository.get_run_request(run_id)
+        if payload is None:
+            return None
+        try:
+            return AnalyzeRequest.model_validate(payload)
+        except Exception:  # noqa: BLE001
+            return None
 
     def get_run(self, run_id: str) -> AnalyzeRunResponse | None:
         payload = self.repository.get_run(run_id)

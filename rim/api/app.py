@@ -51,18 +51,32 @@ async def analyze(
     request: AnalyzeRequest,
     response: Response,
     wait: bool = Query(default=False),
+    run_id: str | None = Query(default=None),
 ) -> AnalyzeRunResponse:
-    run_id = await job_queue.submit(request)
+    try:
+        resolved_run_id, created = await job_queue.submit(request, run_id=run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if wait:
-        run = await job_queue.wait_for(run_id)
+        run = await job_queue.wait_for(resolved_run_id)
         if run is None:
             raise HTTPException(status_code=500, detail="Run state missing after execution")
         response.status_code = 200
         return run
 
-    response.status_code = 202
-    return AnalyzeRunResponse(run_id=run_id, status="queued", result=None, error_summary=None)
+    run = orchestrator.get_run(resolved_run_id)
+    if run is None:
+        response.status_code = 202
+        return AnalyzeRunResponse(
+            run_id=resolved_run_id,
+            status="queued",
+            result=None,
+            error_summary=None,
+            error=None,
+        )
+    response.status_code = 202 if created else 200
+    return run
 
 
 @app.get("/runs", response_model=RunListResponse)

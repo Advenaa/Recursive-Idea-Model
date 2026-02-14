@@ -246,11 +246,14 @@ Request JSON:
 Behavior:
 
 1. Creates a run.
-2. Persists request payload in DB and enqueues run in persistent worker queue.
-3. Starts pipeline execution in background by default.
-4. Returns `{ run_id, status }` with HTTP 202 when `wait=false`.
-5. When `wait=true`, blocks until completion and returns full run payload.
-6. On stage failure, response includes structured error:
+2. Supports idempotent `run_id` query parameter:
+   - same `run_id` + same request returns existing run state,
+   - same `run_id` + different request returns HTTP 409.
+3. Persists request payload in DB and enqueues run in persistent worker queue.
+4. Starts pipeline execution in background by default.
+5. Returns HTTP 202 for newly created queued runs; returns HTTP 200 when reusing existing `run_id`.
+6. When `wait=true`, blocks until completion and returns full run payload.
+7. On stage failure, response includes structured error:
    - `stage`,
    - `provider`,
    - `message`,
@@ -316,8 +319,9 @@ Flags:
 1. `--mode deep|fast` (default `deep`)
 2. `--domain <text>`
 3. `--constraint <text>` (repeatable)
-4. `--json` (print raw JSON)
-5. `--save <path>` (write output artifact)
+4. `--run-id <text>` (idempotent run key)
+5. `--json` (print raw JSON)
+6. `--save <path>` (write output artifact)
 
 ### 8.2 Run Inspection
 
@@ -466,3 +470,4 @@ RIM/
 4. Both `codex` and `claude` CLI adapters are implemented and health-checkable.
 5. Failure of one provider can fall back to the other for at least one retry.
 6. Run artifacts are persisted and retrievable via `GET /runs` and `GET /runs/{run_id}`.
+7. Re-submitting `POST /analyze` with same `run_id` is idempotent and does not create duplicate runs.

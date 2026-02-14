@@ -122,6 +122,12 @@ As a user, I submit an idea and receive a deeply analyzed revision with:
   - CLI command path, or
   - HTTP API endpoint.
 
+### FR-8 Idempotent Run Control
+
+- Support client-provided `run_id` to safely retry submission without duplicating runs.
+- Reuse existing run when `run_id` and request payload match.
+- Reject with conflict when `run_id` is reused with a different request payload.
+
 ## 9) Non-Functional Requirements
 
 1. Reliability: system returns structured output on all valid inputs.
@@ -218,3 +224,29 @@ Each run must return JSON with this minimum schema:
 3. Quality scoring rubric weights (rigor vs novelty vs practicality)?
 4. Minimum acceptable deep mode runtime for your workflow?
 
+## 17) Implementation Status (February 14, 2026)
+
+### Milestone Status
+
+- M1 Foundation: completed
+- M2 Core Pipeline: completed
+- M3 Memory: completed
+- M4 Evaluation: completed for benchmark, baseline comparator, report compare, and regression gate
+- M5 Hardening: completed for retries, structured error contract, partial-run behavior, telemetry logs, and CI
+
+### Delivered Capabilities
+
+- Deep mode default with recursive decomposition + branch/runtime controls
+- Parallel critic stage and multi-pass synthesis
+- Persistent run artifacts, memory reuse, and feedback loop
+- API endpoints: `/analyze`, `/runs`, `/runs/{run_id}`, `/runs/{run_id}/logs`, `/runs/{run_id}/feedback`, `/health`
+- Idempotent API submission with `run_id`
+- CLI coverage for analyze, run inspection/list/logs/feedback, and eval workflows
+- Evaluation workflows: `eval run`, `eval baseline`, `eval compare`, `eval gate`, `eval duel`
+- GitHub Actions CI for compile + tests on push/PR
+
+### Remaining Post-MVP Enhancements
+
+- Replace heuristic scoring with a stronger domain-weighted rubric
+- Expand benchmark set to a stable 20-idea canonical pack with blind-review protocol
+- Add explicit run cancel/retry controls

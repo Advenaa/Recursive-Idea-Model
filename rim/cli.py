@@ -36,8 +36,40 @@ async def _cmd_analyze(args: argparse.Namespace) -> int:
         constraints=args.constraint or [],
         desired_outcome=args.desired_outcome,
     )
-    result = await orchestrator.analyze(request)
-    payload = result.model_dump()
+    run_payload = None
+    result = None
+
+    if args.run_id:
+        run_payload = orchestrator.get_run(args.run_id)
+        if run_payload is not None:
+            existing_request = orchestrator.get_run_request(args.run_id)
+            if (
+                existing_request is not None
+                and existing_request.model_dump() != request.model_dump()
+            ):
+                print("run_id already exists with a different request payload.")
+                return 1
+            if run_payload.result is not None:
+                result = run_payload.result
+        else:
+            run_id = orchestrator.create_run(
+                request=request,
+                status="running",
+                run_id=args.run_id,
+            )
+            result = await orchestrator.execute_run(run_id, request)
+            run_payload = orchestrator.get_run(run_id)
+    else:
+        result = await orchestrator.analyze(request)
+        run_payload = orchestrator.get_run(result.run_id)
+
+    if run_payload is not None and run_payload.result is None:
+        payload = run_payload.model_dump()
+    elif result is not None:
+        payload = result.model_dump()
+    else:
+        payload = {"status": "unknown", "error": "No run output available."}
+
     if args.save:
         Path(args.save).write_text(
             json.dumps(payload, indent=2),
@@ -46,10 +78,22 @@ async def _cmd_analyze(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
-        print(f"run_id: {result.run_id}")
-        print(f"mode: {result.mode}")
-        print(f"confidence_score: {result.confidence_score:.2f}")
-        print(f"synthesized_idea: {result.synthesized_idea}")
+        if result is not None:
+            status = run_payload.status if run_payload is not None else "completed"
+            print(f"run_id: {result.run_id}")
+            print(f"status: {status}")
+            print(f"mode: {result.mode}")
+            print(f"confidence_score: {result.confidence_score:.2f}")
+            print(f"synthesized_idea: {result.synthesized_idea}")
+            if run_payload is not None and run_payload.error_summary:
+                print(f"error_summary: {run_payload.error_summary}")
+        elif run_payload is not None:
+            print(f"run_id: {run_payload.run_id}")
+            print(f"status: {run_payload.status}")
+            if run_payload.error_summary:
+                print(f"error_summary: {run_payload.error_summary}")
+    if run_payload is not None and run_payload.status == "failed":
+        return 2
     return 0
 
 
@@ -229,6 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--domain")
     analyze.add_argument("--constraint", action="append")
     analyze.add_argument("--desired-outcome")
+    analyze.add_argument("--run-id")
     analyze.add_argument("--json", action="store_true")
     analyze.add_argument("--save")
 
