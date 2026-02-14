@@ -228,3 +228,32 @@ class RunRepository:
             "error_summary": run_row["error_summary"],
             "result": result_payload,
         }
+
+    def get_stage_logs(self, run_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT stage, provider, latency_ms, status, meta_json, created_at
+            FROM stage_logs
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        logs: list[dict] = []
+        for row in rows:
+            meta_raw = row["meta_json"] or "{}"
+            try:
+                meta = json.loads(meta_raw)
+            except json.JSONDecodeError:
+                meta = {"raw_meta": meta_raw}
+            logs.append(
+                {
+                    "stage": row["stage"],
+                    "provider": row["provider"],
+                    "latency_ms": row["latency_ms"],
+                    "status": row["status"],
+                    "meta": meta,
+                    "created_at": row["created_at"],
+                }
+            )
+        return logs

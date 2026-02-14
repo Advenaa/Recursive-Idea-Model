@@ -64,6 +64,7 @@ curl -s -X POST "http://127.0.0.1:8000/analyze" \
   -d '{"idea":"Build an AI CFO for freelancers","mode":"deep"}'
 
 curl -s "http://127.0.0.1:8000/runs/<run_id>"
+curl -s "http://127.0.0.1:8000/runs/<run_id>/logs"
 ```
 
 API usage (blocking for one call):
@@ -79,6 +80,7 @@ Run CLI:
 ```bash
 rim health
 rim analyze --idea "Your idea here" --mode deep --json
+rim run logs <run_id>
 rim eval run --mode deep --limit 3
 ```
 

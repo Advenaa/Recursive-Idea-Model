@@ -239,6 +239,16 @@ Returns:
 3. `codex` adapter health,
 4. `claude` adapter health.
 
+### 7.4 `GET /runs/{run_id}/logs`
+
+Returns ordered stage telemetry for the run:
+
+1. stage,
+2. provider,
+3. latency,
+4. status,
+5. stage metadata (including decomposition stop reason when applicable).
+
 ## 8) Local CLI Specification
 
 ### 8.1 Analyze Command

@@ -6,7 +6,13 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Response
 
 from rim.core.orchestrator import RimOrchestrator
-from rim.core.schemas import AnalyzeRequest, AnalyzeResult, AnalyzeRunResponse, HealthResponse
+from rim.core.schemas import (
+    AnalyzeRequest,
+    AnalyzeResult,
+    AnalyzeRunResponse,
+    HealthResponse,
+    RunLogsResponse,
+)
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
 
@@ -66,3 +72,11 @@ async def get_run(run_id: str) -> AnalyzeRunResponse:
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
+
+
+@app.get("/runs/{run_id}/logs", response_model=RunLogsResponse)
+async def get_run_logs(run_id: str) -> RunLogsResponse:
+    run = orchestrator.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return orchestrator.get_run_logs(run_id)

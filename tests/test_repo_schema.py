@@ -33,3 +33,23 @@ def test_memory_context_ordering(tmp_path: Path) -> None:
 
     top = repo.get_memory_context(limit=2)
     assert top == ["high", "mid"]
+
+
+def test_stage_logs_roundtrip(tmp_path: Path) -> None:
+    db_path = tmp_path / "rim_test.db"
+    repo = RunRepository(db_path=db_path)
+    repo.create_run("run-2", "deep", "idea")
+    repo.log_stage(
+        run_id="run-2",
+        stage="decompose",
+        status="completed",
+        provider="codex",
+        latency_ms=123,
+        meta={"node_count": 4},
+    )
+    logs = repo.get_stage_logs("run-2")
+    assert len(logs) == 1
+    assert logs[0]["stage"] == "decompose"
+    assert logs[0]["provider"] == "codex"
+    assert logs[0]["latency_ms"] == 123
+    assert logs[0]["meta"]["node_count"] == 4

@@ -54,6 +54,20 @@ class AnalyzeRunResponse(BaseModel):
     error_summary: str | None = None
 
 
+class StageLogEntry(BaseModel):
+    stage: str
+    provider: str | None = None
+    latency_ms: int | None = None
+    status: str
+    meta: dict = Field(default_factory=dict)
+    created_at: str
+
+
+class RunLogsResponse(BaseModel):
+    run_id: str
+    logs: list[StageLogEntry]
+
+
 class HealthResponse(BaseModel):
     ok: bool
     db: bool

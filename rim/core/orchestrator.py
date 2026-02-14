@@ -7,7 +7,14 @@ from rim.agents.critics import run_critics
 from rim.agents.decomposer import decompose_idea
 from rim.agents.synthesizer import synthesize_idea
 from rim.core.modes import get_mode_settings
-from rim.core.schemas import AnalyzeRequest, AnalyzeResult, AnalyzeRunResponse, CriticFinding
+from rim.core.schemas import (
+    AnalyzeRequest,
+    AnalyzeResult,
+    AnalyzeRunResponse,
+    CriticFinding,
+    RunLogsResponse,
+    StageLogEntry,
+)
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
 
@@ -191,4 +198,11 @@ class RimOrchestrator:
             status=payload["status"],
             error_summary=payload.get("error_summary"),
             result=result,
+        )
+
+    def get_run_logs(self, run_id: str) -> RunLogsResponse:
+        logs = self.repository.get_stage_logs(run_id)
+        return RunLogsResponse(
+            run_id=run_id,
+            logs=[StageLogEntry.model_validate(item) for item in logs],
         )
