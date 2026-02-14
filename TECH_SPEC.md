@@ -21,7 +21,7 @@ MVP scope:
 
 ## 2) Core Technical Decisions
 
-1. Language: Python 3.11+.
+1. Language: Python 3.14.x (recommended baseline: 3.14.3).
 2. API framework: FastAPI.
 3. Storage: SQLite for MVP.
 4. Concurrency: `asyncio` + process-level parallelism for critic calls.

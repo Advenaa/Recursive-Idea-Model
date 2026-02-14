@@ -40,10 +40,15 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 Quickstart:
 
 ```bash
-python3.11 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 ```
+
+Python version policy:
+
+- Required: Python `3.14.x`
+- Recommended baseline: Python `3.14.3` (latest stable line as of February 14, 2026)
 
 Run API:
 
