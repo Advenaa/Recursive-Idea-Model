@@ -7,7 +7,9 @@ from uuid import uuid4
 
 from rim.agents.critics import run_critics
 from rim.agents.decomposer import decompose_idea
+from rim.agents.reconciliation import reconcile_findings
 from rim.agents.synthesizer import synthesize_idea
+from rim.core.depth_allocator import decide_next_cycle, severity_counts
 from rim.core.modes import get_mode_settings
 from rim.core.schemas import (
     AnalyzeRequest,
@@ -17,6 +19,7 @@ from rim.core.schemas import (
     RunSummary,
     AnalyzeRunResponse,
     CriticFinding,
+    DecompositionNode,
     RunLogsResponse,
     StageLogEntry,
 )
@@ -119,6 +122,73 @@ def _fallback_synthesis(idea: str, error_message: str) -> dict[str, object]:
     }
 
 
+def _parse_int_env(
+    name: str,
+    default: int,
+    *,
+    lower: int,
+    upper: int,
+) -> int:
+    raw = os.getenv(name)
+    try:
+        value = int(str(raw)) if raw is not None else int(default)
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(lower, min(upper, value))
+
+
+def _parse_float_env(
+    name: str,
+    default: float,
+    *,
+    lower: float,
+    upper: float,
+) -> float:
+    raw = os.getenv(name)
+    try:
+        value = float(str(raw)) if raw is not None else float(default)
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(lower, min(upper, value))
+
+
+def _next_cycle_memory_context(
+    current_memory: list[str],
+    synthesis: dict[str, object],
+    findings: list[CriticFinding],
+) -> list[str]:
+    additions: list[str] = []
+    for change in list(synthesis.get("changes_summary") or [])[:2]:
+        text = str(change).strip()
+        if text:
+            additions.append(f"Current-run change: {text}")
+    for risk in list(synthesis.get("residual_risks") or [])[:2]:
+        text = str(risk).strip()
+        if text:
+            additions.append(f"Current-run risk: {text}")
+    for finding in findings:
+        if finding.severity not in {"high", "critical"}:
+            continue
+        issue = str(finding.issue).strip()
+        if issue:
+            additions.append(f"Current-run finding ({finding.critic_type}): {issue}")
+        if len(additions) >= 6:
+            break
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for entry in [*current_memory, *additions]:
+        normalized = str(entry).strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+    return deduped[:12]
+
+
 class RimOrchestrator:
     def __init__(self, repository: RunRepository, router: ProviderRouter) -> None:
         self.repository = repository
@@ -147,13 +217,54 @@ class RimOrchestrator:
         try:
             default_min_severity = "low" if request.mode == "deep" else "medium"
             memory_min_severity = os.getenv("RIM_MEMORY_MIN_SEVERITY", default_min_severity)
-            memory_max_age_days = int(os.getenv("RIM_MEMORY_MAX_AGE_DAYS", "120"))
+            memory_max_age_days = _parse_int_env(
+                "RIM_MEMORY_MAX_AGE_DAYS",
+                120,
+                lower=1,
+                upper=3650,
+            )
+            max_cycles = _parse_int_env(
+                "RIM_MAX_ANALYSIS_CYCLES",
+                1,
+                lower=1,
+                upper=6,
+            )
+            min_confidence_to_stop = _parse_float_env(
+                "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE",
+                0.78,
+                lower=0.0,
+                upper=1.0,
+            )
+            max_residual_risks_to_stop = _parse_int_env(
+                "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS",
+                2,
+                lower=0,
+                upper=20,
+            )
+            max_high_findings_to_stop = _parse_int_env(
+                "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS",
+                1,
+                lower=0,
+                upper=20,
+            )
+            consensus_min_agents = _parse_int_env(
+                "RIM_RECONCILE_CONSENSUS_MIN_AGENTS",
+                3,
+                lower=2,
+                upper=8,
+            )
+            consensus_min_confidence = _parse_float_env(
+                "RIM_RECONCILE_CONSENSUS_MIN_CONFIDENCE",
+                0.7,
+                lower=0.0,
+                upper=1.0,
+            )
             self.repository.mark_run_status(run_id=run_id, status="running")
             self.repository.log_stage(
                 run_id=run_id,
                 stage="queue",
                 status="completed",
-                meta={"mode": request.mode},
+                meta={"mode": request.mode, "max_cycles": max_cycles},
             )
             memory_context = self.repository.get_memory_context(
                 limit=8,
@@ -172,68 +283,133 @@ class RimOrchestrator:
                     "min_severity": memory_min_severity,
                 },
             )
-            decompose_started = time.perf_counter()
-            nodes, decompose_provider, decompose_meta = await decompose_idea(
-                provider_session,
-                request.idea,
-                settings,
-                domain=request.domain,
-                constraints=request.constraints,
-                memory_context=memory_context,
-            )
-            self.repository.log_stage(
-                run_id=run_id,
-                stage="decompose",
-                status="completed",
-                provider=decompose_provider,
-                latency_ms=int((time.perf_counter() - decompose_started) * 1000),
-                meta={"node_count": len(nodes), **decompose_meta},
-            )
-            self.repository.save_nodes(run_id, nodes)
-
-            challenge_started = time.perf_counter()
-            findings = await run_critics(provider_session, nodes, settings)
-            self.repository.log_stage(
-                run_id=run_id,
-                stage="challenge_parallel",
-                status="completed",
-                latency_ms=int((time.perf_counter() - challenge_started) * 1000),
-                meta={"finding_count": len(findings)},
-            )
-            self.repository.save_findings(run_id, findings)
-
-            synth_started = time.perf_counter()
+            current_idea = request.idea
+            working_memory_context = list(memory_context)
+            previous_confidence: float | None = None
+            cycles_completed = 0
             partial_error: dict | None = None
-            try:
-                synthesis, synthesis_providers = await synthesize_idea(
+            nodes: list[DecompositionNode] = []
+            findings: list[CriticFinding] = []
+            synthesis: dict[str, object] = _fallback_synthesis(
+                request.idea,
+                "pipeline did not produce synthesis output",
+            )
+
+            for cycle in range(1, max_cycles + 1):
+                decompose_started = time.perf_counter()
+                nodes, decompose_provider, decompose_meta = await decompose_idea(
                     provider_session,
-                    request.idea,
-                    nodes,
-                    findings,
+                    current_idea,
                     settings,
-                    memory_context=memory_context,
+                    domain=request.domain,
+                    constraints=request.constraints,
+                    memory_context=working_memory_context,
                 )
                 self.repository.log_stage(
                     run_id=run_id,
-                    stage="synthesis",
+                    stage="decompose",
                     status="completed",
-                    provider=",".join(synthesis_providers),
-                    latency_ms=int((time.perf_counter() - synth_started) * 1000),
+                    provider=decompose_provider,
+                    latency_ms=int((time.perf_counter() - decompose_started) * 1000),
+                    meta={"cycle": cycle, "node_count": len(nodes), **decompose_meta},
                 )
-            except Exception as exc:  # noqa: BLE001
-                partial_error = _error_from_exception(exc, default_stage="synthesis")
-                synthesis = _fallback_synthesis(
-                    request.idea,
-                    str(partial_error["message"]),
+
+                challenge_started = time.perf_counter()
+                findings = await run_critics(provider_session, nodes, settings)
+                self.repository.log_stage(
+                    run_id=run_id,
+                    stage="challenge_parallel",
+                    status="completed",
+                    latency_ms=int((time.perf_counter() - challenge_started) * 1000),
+                    meta={"cycle": cycle, "finding_count": len(findings)},
+                )
+                reconciliation = reconcile_findings(
+                    findings,
+                    consensus_min_agents=consensus_min_agents,
+                    consensus_min_confidence=consensus_min_confidence,
                 )
                 self.repository.log_stage(
                     run_id=run_id,
-                    stage="synthesis",
-                    status="failed",
-                    provider=partial_error.get("provider"),
-                    latency_ms=int((time.perf_counter() - synth_started) * 1000),
-                    meta={"error": partial_error},
+                    stage="challenge_reconciliation",
+                    status="completed",
+                    meta={"cycle": cycle, **reconciliation["summary"]},
                 )
+
+                synth_started = time.perf_counter()
+                try:
+                    synthesis, synthesis_providers = await synthesize_idea(
+                        provider_session,
+                        current_idea,
+                        nodes,
+                        findings,
+                        settings,
+                        memory_context=working_memory_context,
+                        reconciliation=reconciliation,
+                    )
+                    self.repository.log_stage(
+                        run_id=run_id,
+                        stage="synthesis",
+                        status="completed",
+                        provider=",".join(synthesis_providers),
+                        latency_ms=int((time.perf_counter() - synth_started) * 1000),
+                        meta={"cycle": cycle},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    partial_error = _error_from_exception(exc, default_stage="synthesis")
+                    synthesis = _fallback_synthesis(
+                        current_idea,
+                        str(partial_error["message"]),
+                    )
+                    self.repository.log_stage(
+                        run_id=run_id,
+                        stage="synthesis",
+                        status="failed",
+                        provider=partial_error.get("provider"),
+                        latency_ms=int((time.perf_counter() - synth_started) * 1000),
+                        meta={"cycle": cycle, "error": partial_error},
+                    )
+                    cycles_completed = cycle
+                    break
+
+                high_findings, critical_findings = severity_counts(findings)
+                decision = decide_next_cycle(
+                    cycle=cycle,
+                    max_cycles=max_cycles,
+                    confidence_score=float(synthesis["confidence_score"]),
+                    residual_risk_count=len(
+                        list(synthesis["residual_risks"])
+                        if isinstance(synthesis.get("residual_risks"), list)
+                        else []
+                    ),
+                    high_severity_findings=high_findings,
+                    critical_findings=critical_findings,
+                    previous_confidence=previous_confidence,
+                    min_confidence_to_stop=min_confidence_to_stop,
+                    max_residual_risks_to_stop=max_residual_risks_to_stop,
+                    max_high_findings_to_stop=max_high_findings_to_stop,
+                )
+                self.repository.log_stage(
+                    run_id=run_id,
+                    stage="depth_allocator",
+                    status="completed",
+                    meta={
+                        "cycle": cycle,
+                        "decision": decision.__dict__,
+                    },
+                )
+                cycles_completed = cycle
+                if not decision.recurse:
+                    break
+                previous_confidence = float(synthesis["confidence_score"])
+                current_idea = str(synthesis["synthesized_idea"])
+                working_memory_context = _next_cycle_memory_context(
+                    working_memory_context,
+                    synthesis,
+                    findings,
+                )
+
+            self.repository.save_nodes(run_id, nodes)
+            self.repository.save_findings(run_id, findings)
             self.repository.save_synthesis(
                 run_id=run_id,
                 synthesized_idea=str(synthesis["synthesized_idea"]),
@@ -254,13 +430,15 @@ class RimOrchestrator:
                 stage="memory_write",
                 status="completed",
                 latency_ms=int((time.perf_counter() - memory_write_started) * 1000),
-                meta={"entries": len(memory_entries)},
+                meta={"entries": len(memory_entries), "cycles_completed": cycles_completed},
             )
+            provider_budget_meta = provider_session.get_usage_meta()
+            provider_budget_meta["cycles_completed"] = cycles_completed
             self.repository.log_stage(
                 run_id=run_id,
                 stage="provider_budget",
                 status="completed",
-                meta=provider_session.get_usage_meta(),
+                meta=provider_budget_meta,
             )
 
             result = AnalyzeResult(

@@ -126,6 +126,12 @@ Environment variables:
 18. `RIM_JSON_REPAIR_RETRIES` default `1` (retry invalid JSON response once before provider fallback)
 19. `RIM_MEMORY_MAX_AGE_DAYS` default `120`
 20. `RIM_MEMORY_MIN_SEVERITY` default `medium` (or `low` for deep-mode override)
+21. `RIM_MAX_ANALYSIS_CYCLES` default `1` (max recursive decompose-challenge-synthesize cycles per run)
+22. `RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE` default `0.78` (confidence threshold for stopping recursion)
+23. `RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS` default `2` (residual risk tolerance before recurse)
+24. `RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS` default `1` (high-severity finding tolerance before recurse)
+25. `RIM_RECONCILE_CONSENSUS_MIN_AGENTS` default `3` (minimum distinct critic roles to mark consensus flaw)
+26. `RIM_RECONCILE_CONSENSUS_MIN_CONFIDENCE` default `0.7` (minimum average confidence for consensus flaw)
 
 ## 5) Modes and Runtime Controls
 
@@ -350,13 +356,16 @@ Additional eval commands:
 ### 9.1 Stage Pipeline
 
 1. `intake`
-2. `decompose`
-3. `challenge_parallel`
-4. `synthesize_pass_1`
-5. `self_critique` (deep only)
-6. `synthesize_pass_2` (deep only)
-7. `memory_write`
-8. `finalize`
+2. `memory_read`
+3. `decompose` (cycle N)
+4. `challenge_parallel` (cycle N)
+5. `challenge_reconciliation` (consensus/disagreement aggregation)
+6. `synthesis` (cycle N)
+7. `depth_allocator` (decide recurse or stop)
+8. Repeat steps 3-7 while recursion decision is true and cycle budget remains
+9. `memory_write`
+10. `provider_budget`
+11. `finalize`
 
 ### 9.2 Parallel Challenge
 

@@ -276,9 +276,9 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Learning layer:
   persistent memory and feedback exist, but no adaptive strategy learning/meta-model for decomposition/challenge/synthesis policy updates.
 - Orchestration depth/breadth policy:
-  parallel challenge exists, but no explicit DepthAllocator that decides recursive continuation after each synthesis cycle.
+  recursive cycle controller and heuristic DepthAllocator exist, but there is no learned depth-vs-breadth policy training yet.
 - Challenge reconciliation:
-  critic outputs are aggregated, but there is no explicit disagreement arbitration or consensus stress-test module.
+  basic consensus/disagreement aggregation is implemented, but there is no explicit devil's-advocate respawn or specialist arbitration sub-agent loop.
 
 ### 20.3 Missing / Slacking Against SOTA Paper
 
@@ -286,12 +286,11 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Neuro-symbolic verification loops (formal claim testing, executable checks, theorem/constraint tooling).
 - Tripartite memory architecture (episodic, working, tool) with autonomous memory folding.
 - RL-based orchestration training (PARL/ARPO/AEPO-style policy optimization and credit assignment).
-- Full recursive cycle controller that repeatedly re-enters decompose->challenge->synthesize until stability criteria are met.
 
 ### 20.4 Gap-Closure Priorities
 
-1. P0: add recursive cycle controller + DepthAllocator policy (stability/quality/budget-driven loop control).
-2. P0: add critique reconciliation module (consensus detection, disagreement arbitration, diversity guardrails).
+1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration.
+2. P0: extend critique reconciliation from aggregation to active disagreement arbitration and diversity guardrails.
 3. P1: add specialization layer with dynamic role/tool selection contracts.
 4. P1: add verification adapters for code execution and structured factual/constraint checks.
 5. P2: upgrade memory to episodic/working/tool stores and implement folding triggers.
@@ -299,7 +298,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 
 ### 20.5 Delivery Stages for Paper Parity
 
-1. v0.2: recursive cycle controller + reconciliation + stronger evaluation pack.
+1. v0.2: tune recursive cycle controller + expand reconciliation + stronger evaluation pack.
 2. v0.3: specialization layer + external verification tools.
 3. v0.4: tripartite memory + folding.
 4. v0.5: RL orchestration training and policy rollout.

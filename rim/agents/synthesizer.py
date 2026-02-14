@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from rim.core.modes import ModeSettings
@@ -52,6 +53,9 @@ Decomposition nodes:
 Critic findings:
 {findings}
 
+Critique reconciliation:
+{reconciliation}
+
 Memory context from prior runs:
 {memory_context}
 """
@@ -101,6 +105,20 @@ def _normalize_synthesis(payload: dict[str, Any], idea: str) -> dict[str, Any]:
     }
 
 
+def _reconciliation_block(reconciliation: dict[str, Any] | None) -> str:
+    if not reconciliation:
+        return "none"
+    summary = reconciliation.get("summary")
+    consensus = list(reconciliation.get("consensus_flaws") or [])[:6]
+    disagreements = list(reconciliation.get("disagreements") or [])[:6]
+    payload = {
+        "summary": summary if isinstance(summary, dict) else {},
+        "consensus_flaws": consensus,
+        "disagreements": disagreements,
+    }
+    return json.dumps(payload)
+
+
 async def synthesize_idea(
     router: ProviderRouter,
     idea: str,
@@ -108,6 +126,7 @@ async def synthesize_idea(
     findings: list[CriticFinding],
     settings: ModeSettings,
     memory_context: list[str] | None = None,
+    reconciliation: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     node_view = [
         {
@@ -133,6 +152,7 @@ async def synthesize_idea(
         idea=idea,
         nodes=node_view,
         findings=finding_view,
+        reconciliation=_reconciliation_block(reconciliation),
         memory_context=_memory_context_block(memory_context),
     )
     primary_payload, primary_provider = await router.invoke_json(
