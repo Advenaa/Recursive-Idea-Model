@@ -183,6 +183,8 @@ export RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC=8
 export RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD="python scripts/advanced_verify_adapter.py"
 export RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD="python scripts/advanced_verify_adapter.py"
 export RIM_ADV_VERIFY_EXTERNAL_DATA_CMD="python scripts/advanced_verify_adapter.py"
+# Optional for adapter script:
+# export RIM_ADV_VERIFY_ADAPTER_SOLVER_BACKEND=z3
 ```
 
 Verification constraint formats:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -10,12 +11,16 @@ def _script_path() -> Path:
     return Path(__file__).resolve().parents[1] / "scripts" / "advanced_verify_adapter.py"
 
 
-def _run_adapter(payload: dict) -> dict:
+def _run_adapter(payload: dict, env: dict[str, str] | None = None) -> dict:
+    cmd_env = os.environ.copy()
+    if env:
+        cmd_env.update(env)
     completed = subprocess.run(
         [sys.executable, str(_script_path())],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
+        env=cmd_env,
         check=False,
         timeout=5,
     )
@@ -71,3 +76,27 @@ def test_advanced_verify_adapter_handles_bad_request() -> None:
     result = _run_adapter(payload)
     assert result["passed"] is False
     assert "unknown variable" in str(result["error"]).lower()
+
+
+def test_advanced_verify_adapter_z3_backend_falls_back_when_unavailable() -> None:
+    payload = {
+        "check_type": "solver",
+        "payload": "confidence_score >= 0.6",
+        "context": {
+            "confidence_score": 0.8,
+            "change_count": 1,
+            "risk_count": 0,
+            "experiment_count": 1,
+            "finding_count": 1,
+            "high_finding_count": 0,
+            "critical_finding_count": 0,
+        },
+        "synthesis": {},
+    }
+    result = _run_adapter(
+        payload,
+        env={"RIM_ADV_VERIFY_ADAPTER_SOLVER_BACKEND": "z3"},
+    )
+    assert result["passed"] is True
+    backend = str((result.get("result") or {}).get("backend"))
+    assert backend in {"z3", "ast_fallback"}

@@ -49,6 +49,13 @@ ALLOWED_AST_NODES = (
 )
 
 
+def _solver_backend() -> str:
+    backend = str(os.getenv("RIM_ADV_VERIFY_ADAPTER_SOLVER_BACKEND", "ast")).strip().lower()
+    if backend in {"ast", "z3"}:
+        return backend
+    return "ast"
+
+
 def _read_request() -> dict[str, Any]:
     raw = sys.stdin.read().strip()
     if not raw:
@@ -123,6 +130,97 @@ def _safe_eval(expression: str, context: dict[str, Any]) -> bool:
     return bool(value)
 
 
+def _z3_from_ast(node: ast.AST, context: dict[str, Any], z3: Any) -> Any:  # noqa: ANN401
+    if isinstance(node, ast.Expression):
+        return _z3_from_ast(node.body, context, z3)
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, bool):
+            return z3.BoolVal(value)
+        if isinstance(value, (int, float)):
+            return z3.RealVal(float(value))
+        raise ValueError("unsupported constant type for z3 backend")
+    if isinstance(node, ast.Name):
+        if node.id not in context:
+            raise ValueError(f"unknown variable '{node.id}'")
+        value = context[node.id]
+        if isinstance(value, bool):
+            return z3.BoolVal(value)
+        if isinstance(value, (int, float)):
+            return z3.RealVal(float(value))
+        raise ValueError(f"unsupported variable type for '{node.id}' in z3 backend")
+    if isinstance(node, ast.UnaryOp):
+        value = _z3_from_ast(node.operand, context, z3)
+        if isinstance(node.op, ast.Not):
+            return z3.Not(value)
+        if isinstance(node.op, ast.USub):
+            return -value
+        if isinstance(node.op, ast.UAdd):
+            return value
+        raise ValueError("unsupported unary operator for z3 backend")
+    if isinstance(node, ast.BinOp):
+        left = _z3_from_ast(node.left, context, z3)
+        right = _z3_from_ast(node.right, context, z3)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            return left / right
+        if isinstance(node.op, ast.Mod):
+            return z3.Mod(left, right)
+        if isinstance(node.op, ast.Pow):
+            return left**right
+        if isinstance(node.op, ast.FloorDiv):
+            return left / right
+        raise ValueError("unsupported binary operator for z3 backend")
+    if isinstance(node, ast.BoolOp):
+        values = [_z3_from_ast(item, context, z3) for item in node.values]
+        if isinstance(node.op, ast.And):
+            return z3.And(*values)
+        if isinstance(node.op, ast.Or):
+            return z3.Or(*values)
+        raise ValueError("unsupported boolean operator for z3 backend")
+    if isinstance(node, ast.Compare):
+        left = _z3_from_ast(node.left, context, z3)
+        comparisons: list[Any] = []
+        cursor = left
+        for op, comparator in zip(node.ops, node.comparators, strict=False):
+            right = _z3_from_ast(comparator, context, z3)
+            if isinstance(op, ast.Eq):
+                comparisons.append(cursor == right)
+            elif isinstance(op, ast.NotEq):
+                comparisons.append(cursor != right)
+            elif isinstance(op, ast.Gt):
+                comparisons.append(cursor > right)
+            elif isinstance(op, ast.GtE):
+                comparisons.append(cursor >= right)
+            elif isinstance(op, ast.Lt):
+                comparisons.append(cursor < right)
+            elif isinstance(op, ast.LtE):
+                comparisons.append(cursor <= right)
+            else:
+                raise ValueError("unsupported comparison operator for z3 backend")
+            cursor = right
+        return z3.And(*comparisons) if comparisons else z3.BoolVal(True)
+    raise ValueError(f"unsupported syntax for z3 backend: {type(node).__name__}")
+
+
+def _safe_eval_z3(expression: str, context: dict[str, Any]) -> bool:
+    try:
+        import z3  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"z3 backend unavailable: {exc}") from exc
+    parsed = ast.parse(expression, mode="eval")
+    _validate_ast(parsed, set(context.keys()))
+    expr = _z3_from_ast(parsed, context, z3)
+    solver = z3.Solver()
+    solver.add(expr)
+    return solver.check() == z3.sat
+
+
 def _sample_context(base: dict[str, Any], rng: random.Random) -> dict[str, Any]:
     sampled = dict(base)
     sampled["confidence_score"] = max(
@@ -149,10 +247,20 @@ def _run_solver(payload: str, context: dict[str, Any]) -> tuple[bool, Any, str |
     expression = str(payload).strip()
     if not expression:
         return False, None, "missing solver expression"
+    backend = _solver_backend()
     try:
+        if backend == "z3":
+            passed = _safe_eval_z3(expression, context)
+            return passed, {"expression": expression, "backend": "z3"}, None
         passed = _safe_eval(expression, context)
-        return passed, {"expression": expression}, None
+        return passed, {"expression": expression, "backend": "ast"}, None
     except Exception as exc:  # noqa: BLE001
+        if backend == "z3":
+            try:
+                passed = _safe_eval(expression, context)
+                return passed, {"expression": expression, "backend": "ast_fallback"}, None
+            except Exception:  # noqa: BLE001
+                pass
         return False, None, str(exc)
 
 

@@ -165,6 +165,7 @@ Environment variables:
 57. `RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD` optional command (external backend for `simulate:` checks)
 58. `RIM_ADV_VERIFY_EXTERNAL_DATA_CMD` optional command (external backend for `data:` checks)
 59. Reference adapter template: `scripts/advanced_verify_adapter.py` (stdin JSON -> stdout JSON contract)
+60. Optional adapter env: `RIM_ADV_VERIFY_ADAPTER_SOLVER_BACKEND=z3` (use z3 backend when available, fallback otherwise)
 
 ## 5) Modes and Runtime Controls
 
