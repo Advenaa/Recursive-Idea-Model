@@ -302,6 +302,16 @@ class RimOrchestrator:
                 lower=1,
                 upper=20,
             )
+            python_exec_checks_enabled = _parse_bool_env(
+                "RIM_ENABLE_PYTHON_EXEC_CHECKS",
+                False,
+            )
+            python_exec_timeout_sec = _parse_int_env(
+                "RIM_PYTHON_EXEC_TIMEOUT_SEC",
+                2,
+                lower=1,
+                upper=15,
+            )
             enable_memory_folding = _parse_bool_env(
                 "RIM_ENABLE_MEMORY_FOLDING",
                 request.mode == "deep",
@@ -526,12 +536,18 @@ class RimOrchestrator:
                         synthesis=synthesis,
                         findings=findings,
                         max_checks=executable_verification_max_checks,
+                        enable_python_exec=python_exec_checks_enabled,
+                        python_exec_timeout_sec=python_exec_timeout_sec,
                     )
                     self.repository.log_stage(
                         run_id=run_id,
                         stage="verification_executable",
                         status="completed",
-                        meta={"cycle": cycle, **exec_verification["summary"]},
+                        meta={
+                            "cycle": cycle,
+                            "python_exec_enabled": python_exec_checks_enabled,
+                            **exec_verification["summary"],
+                        },
                     )
                     failed_exec_checks = [
                         check

@@ -66,3 +66,30 @@ def test_executable_verification_skips_when_no_prefixed_checks() -> None:
     )
     assert payload["summary"]["total_checks"] == 0
     assert payload["summary"]["skipped"] is True
+
+
+def test_executable_verification_python_exec_disabled_by_default() -> None:
+    payload = run_executable_verification(
+        constraints=["python_exec: passed = context['change_count'] >= 1"],
+        synthesis={"changes_summary": ["a"]},
+        findings=[],
+        max_checks=5,
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 1
+    assert payload["checks"][0]["check_type"] == "python_exec"
+    assert "disabled" in str(payload["checks"][0]["error"])
+
+
+def test_executable_verification_python_exec_enabled() -> None:
+    payload = run_executable_verification(
+        constraints=["python_exec: passed = context['change_count'] >= 1"],
+        synthesis={"changes_summary": ["a"]},
+        findings=[],
+        max_checks=5,
+        enable_python_exec=True,
+        python_exec_timeout_sec=2,
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 0
+    assert payload["checks"][0]["check_type"] == "python_exec"

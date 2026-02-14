@@ -280,7 +280,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Challenge reconciliation:
   consensus/disagreement aggregation and disagreement arbitration are implemented, but there is no devil's-advocate respawn or specialist multi-round arbitration loop.
 - Verification layer:
-  deterministic post-synthesis checks and safe executable constraint verification are implemented, but no theorem/solver/simulation/data-backed verification loop yet.
+  deterministic post-synthesis checks, safe executable expressions, and optional timed `python_exec` checks are implemented, but no theorem/solver/simulation/data-backed verification loop yet.
 - Specialization layer:
   domain-specialist critic spawning is implemented at prompt/stage level, but no dynamic multi-role agent factory with tool-routing policies.
 

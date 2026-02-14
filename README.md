@@ -151,13 +151,17 @@ export RIM_ENABLE_DISAGREEMENT_ARBITRATION=1
 export RIM_ARBITRATION_MAX_JOBS=2
 export RIM_ENABLE_EXECUTABLE_VERIFICATION=1
 export RIM_EXEC_VERIFY_MAX_CHECKS=5
+export RIM_ENABLE_PYTHON_EXEC_CHECKS=0
+export RIM_PYTHON_EXEC_TIMEOUT_SEC=2
 ```
 
 Executable verification constraint format:
 
 - Prefix constraint with `python:` / `py:` / `assert:` to run a safe expression check.
+- Prefix constraint with `python_exec:` to run an explicit Python snippet in a timed subprocess.
 - Available variables in expressions: `confidence_score`, `change_count`, `risk_count`, `experiment_count`, `finding_count`, `high_finding_count`, `critical_finding_count`.
 - Example: `python: confidence_score >= 0.7 and risk_count <= 2`
+- `python_exec:` snippets receive `context` and should set `passed = True|False` (optional `detail` string).
 
 Self-iteration loop:
 

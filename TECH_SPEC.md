@@ -142,6 +142,8 @@ Environment variables:
 34. `RIM_ARBITRATION_MAX_JOBS` default `2` (max disagreement arbitration calls per cycle)
 35. `RIM_ENABLE_EXECUTABLE_VERIFICATION` default `1` in deep mode (run safe executable checks from prefixed constraints)
 36. `RIM_EXEC_VERIFY_MAX_CHECKS` default `5` (max executable constraint checks per cycle)
+37. `RIM_ENABLE_PYTHON_EXEC_CHECKS` default `0` (allow `python_exec:` subprocess checks)
+38. `RIM_PYTHON_EXEC_TIMEOUT_SEC` default `2` (timeout per `python_exec:` check)
 
 ## 5) Modes and Runtime Controls
 
@@ -392,8 +394,11 @@ Additional eval commands:
 ### 9.3 Executable Verification
 
 1. Constraints prefixed with `python:`, `py:`, or `assert:` are treated as executable checks.
-2. Checks are evaluated with a safe expression evaluator (no function calls, attribute access, or imports).
-3. Supported context variables:
+2. Constraints prefixed with `python_exec:` are treated as timed subprocess checks when explicitly enabled.
+3. Expression checks are evaluated with a safe evaluator (no function calls, attribute access, or imports).
+4. `python_exec:` checks run with a restricted builtins set and must set `passed = True|False`.
+5. Failed executable checks are logged and converted into residual risks with confidence penalty.
+6. Supported context variables:
    - `confidence_score`
    - `change_count`
    - `risk_count`
@@ -401,7 +406,6 @@ Additional eval commands:
    - `finding_count`
    - `high_finding_count`
    - `critical_finding_count`
-4. Failed executable checks are logged and converted into residual risks with confidence penalty.
 
 ## 10) Prompt and Schema Discipline
 

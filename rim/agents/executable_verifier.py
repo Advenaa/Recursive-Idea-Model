@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import ast
+import json
+import subprocess
+import sys
 from typing import Any
 
 from rim.core.schemas import CriticFinding
 
 _CHECK_PREFIXES = ("python:", "py:", "assert:")
+_EXEC_PREFIXES = ("python_exec:", "exec:")
 
 _ALLOWED_AST_NODES = (
     ast.Expression,
@@ -44,21 +48,32 @@ _ALLOWED_AST_NODES = (
 )
 
 
-def _extract_executable_checks(constraints: list[str] | None, max_checks: int) -> list[str]:
-    checks: list[str] = []
+def _extract_executable_checks(constraints: list[str] | None, max_checks: int) -> list[dict[str, str]]:
+    checks: list[dict[str, str]] = []
     for item in list(constraints or []):
         text = str(item).strip()
         if not text:
             continue
         lowered = text.lower()
-        matched = None
+        matched: dict[str, str] | None = None
         for prefix in _CHECK_PREFIXES:
             if lowered.startswith(prefix):
-                matched = text[len(prefix) :].strip()
+                matched = {
+                    "kind": "python_expression",
+                    "payload": text[len(prefix) :].strip(),
+                }
                 break
         if matched is None:
+            for prefix in _EXEC_PREFIXES:
+                if lowered.startswith(prefix):
+                    matched = {
+                        "kind": "python_exec",
+                        "payload": text[len(prefix) :].strip(),
+                    }
+                    break
+        if matched is None:
             continue
-        if matched:
+        if matched["payload"]:
             checks.append(matched)
         if len(checks) >= max(1, int(max_checks)):
             break
@@ -104,25 +119,105 @@ def _verification_context(
     }
 
 
+def _run_python_exec_check(
+    script: str,
+    context: dict[str, Any],
+    timeout_sec: int,
+) -> tuple[bool, str | None, Any]:
+    wrapper = (
+        "import json,sys\n"
+        "context=json.loads(sys.argv[1])\n"
+        "user_script=sys.argv[2]\n"
+        "safe_builtins={'len':len,'min':min,'max':max,'sum':sum,'abs':abs,'all':all,'any':any}\n"
+        "scope={'context':context,'passed':False,'detail':''}\n"
+        "try:\n"
+        "    exec(user_script, {'__builtins__': safe_builtins}, scope)\n"
+        "    passed=bool(scope.get('passed', False))\n"
+        "    detail=scope.get('detail', '')\n"
+        "    print(json.dumps({'passed': passed, 'detail': detail}))\n"
+        "except Exception as exc:\n"
+        "    print(json.dumps({'passed': False, 'error': str(exc)}))\n"
+        "    sys.exit(3)\n"
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", wrapper, json.dumps(context), script],
+            capture_output=True,
+            text=True,
+            timeout=max(1, int(timeout_sec)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "python_exec check timed out", None
+
+    output = (completed.stdout or "").strip()
+    if not output:
+        return False, (completed.stderr or "python_exec check produced no output").strip(), None
+    try:
+        payload = json.loads(output.splitlines()[-1])
+    except json.JSONDecodeError:
+        return False, f"invalid python_exec output: {output[:200]}", None
+
+    passed = bool(payload.get("passed"))
+    if completed.returncode == 0:
+        return passed, None if passed else "python_exec check failed", payload.get("detail")
+    error = str(payload.get("error") or payload.get("detail") or "python_exec runtime error").strip()
+    return False, error, payload.get("detail")
+
+
 def run_executable_verification(
     *,
     constraints: list[str] | None,
     synthesis: dict[str, object],
     findings: list[CriticFinding],
     max_checks: int = 5,
+    enable_python_exec: bool = False,
+    python_exec_timeout_sec: int = 2,
 ) -> dict[str, object]:
     checks = _extract_executable_checks(constraints, max_checks=max_checks)
     context = _verification_context(synthesis=synthesis, findings=findings)
     results: list[dict[str, object]] = []
 
-    for expression in checks:
+    for check in checks:
+        kind = str(check.get("kind") or "python_expression")
+        payload = str(check.get("payload") or "").strip()
+        if not payload:
+            continue
+        if kind == "python_exec":
+            if not enable_python_exec:
+                results.append(
+                    {
+                        "check_type": "python_exec",
+                        "expression": payload,
+                        "passed": False,
+                        "result": None,
+                        "error": "python_exec checks are disabled",
+                    }
+                )
+                continue
+            passed, error, detail = _run_python_exec_check(
+                payload,
+                context,
+                timeout_sec=python_exec_timeout_sec,
+            )
+            results.append(
+                {
+                    "check_type": "python_exec",
+                    "expression": payload,
+                    "passed": passed,
+                    "result": detail,
+                    "error": error,
+                }
+            )
+            continue
+
         try:
-            value = _safe_eval_expression(expression, context)
+            value = _safe_eval_expression(payload, context)
             passed = bool(value)
             results.append(
                 {
                     "check_type": "python_expression",
-                    "expression": expression,
+                    "expression": payload,
                     "passed": passed,
                     "result": value,
                     "error": None,
@@ -132,7 +227,7 @@ def run_executable_verification(
             results.append(
                 {
                     "check_type": "python_expression",
-                    "expression": expression,
+                    "expression": payload,
                     "passed": False,
                     "result": None,
                     "error": str(exc),

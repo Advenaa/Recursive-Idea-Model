@@ -396,3 +396,71 @@ def test_orchestrator_runs_executable_verification(
     exec_logs = [log for log in logs if log.stage == "verification_executable"]
     assert len(exec_logs) == 1
     assert exec_logs[0].meta["failed_checks"] == 1
+
+
+def test_orchestrator_runs_python_exec_checks_when_enabled(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    async def fake_decompose(*args, **kwargs):  # noqa: ANN001, ANN202
+        root = DecompositionNode(
+            depth=0,
+            component_text="Idea F",
+            node_type="claim",
+            confidence=0.4,
+        )
+        return [root], "codex", {"stop_reason": "max_depth"}
+
+    async def fake_critics(*args, **kwargs):  # noqa: ANN001, ANN202
+        nodes = kwargs.get("nodes") or args[1]
+        return [
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="logic",
+                issue="Need at least one change",
+                severity="medium",
+                confidence=0.7,
+                suggested_fix="Add change",
+                provider="codex",
+            ),
+        ]
+
+    async def fake_synthesize(*args, **kwargs):  # noqa: ANN001, ANN202
+        return (
+            {
+                "synthesized_idea": "Idea F refined",
+                "changes_summary": ["Added one change"],
+                "residual_risks": [],
+                "next_experiments": ["Run pilot."],
+                "confidence_score": 0.66,
+            },
+            ["claude"],
+        )
+
+    monkeypatch.setattr(orchestrator_module, "decompose_idea", fake_decompose)
+    monkeypatch.setattr(orchestrator_module, "run_critics", fake_critics)
+    monkeypatch.setattr(orchestrator_module, "synthesize_idea", fake_synthesize)
+    monkeypatch.setenv("RIM_MAX_ANALYSIS_CYCLES", "1")
+    monkeypatch.setenv("RIM_ENABLE_VERIFICATION", "0")
+    monkeypatch.setenv("RIM_ENABLE_EXECUTABLE_VERIFICATION", "1")
+    monkeypatch.setenv("RIM_ENABLE_PYTHON_EXEC_CHECKS", "1")
+    monkeypatch.setenv("RIM_EXEC_VERIFY_MAX_CHECKS", "3")
+    monkeypatch.setenv("RIM_PYTHON_EXEC_TIMEOUT_SEC", "2")
+
+    repo = RunRepository(db_path=tmp_path / "rim_orchestrator_python_exec.db")
+    orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
+    request = AnalyzeRequest(
+        idea="Idea F",
+        mode="deep",
+        constraints=["python_exec: passed = context['change_count'] >= 1"],
+    )
+    run_id = orchestrator.create_run(request, status="running")
+
+    result = asyncio.run(orchestrator.execute_run(run_id, request))
+    assert result.confidence_score == 0.66
+
+    logs = orchestrator.get_run_logs(run_id).logs
+    exec_logs = [log for log in logs if log.stage == "verification_executable"]
+    assert len(exec_logs) == 1
+    assert exec_logs[0].meta["failed_checks"] == 0
+    assert exec_logs[0].meta["python_exec_enabled"] is True
