@@ -22,6 +22,7 @@ from rim.eval.runner import (
     train_depth_policy,
     train_memory_policy,
     train_rl_depth_and_arbitration_policies,
+    train_rl_spawn_policy,
     train_spawn_policy,
     train_specialist_arbitration_policy,
 )
@@ -366,12 +367,19 @@ def test_calibration_env_exports_formats_env_lines() -> None:
             "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": 0.812,
             "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": 1,
             "RIM_MAX_ANALYSIS_CYCLES": 2,
+            "RIM_SPAWN_ROLE_BOOSTS": {"security": 0.4, "finance": -0.2},
+            "RIM_SPAWN_ROLE_TOOL_OVERRIDES": {"security": ["threat_model", "abuse_case_review"]},
         }
     }
     exports = calibration_env_exports(calibration)
     assert "export RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE=0.812" in exports
     assert "export RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS=1" in exports
     assert "export RIM_MAX_ANALYSIS_CYCLES=2" in exports
+    assert "export RIM_SPAWN_ROLE_BOOSTS='{\"finance\":-0.2,\"security\":0.4}'" in exports
+    assert (
+        "export RIM_SPAWN_ROLE_TOOL_OVERRIDES="
+        "'{\"security\":[\"threat_model\",\"abuse_case_review\"]}'"
+    ) in exports
 
 
 def test_train_depth_policy_aggregates_report_calibrations() -> None:
@@ -701,6 +709,92 @@ def test_train_rl_depth_and_arbitration_policies_outputs_credit_assignment() -> 
     assert payload["credit_assignment"]["specialist"]["top_runs"]
 
 
+def test_train_rl_spawn_policy_outputs_credit_assignment() -> None:
+    reports = [
+        {
+            "created_at": "2026-02-14T00:00:00Z",
+            "dataset_size": 2,
+            "average_quality_score": 0.6,
+            "average_runtime_sec": 64.0,
+            "failure_count": 0,
+            "mode": "deep",
+            "runs": [
+                {
+                    "id": "run-a",
+                    "run_id": "run-a",
+                    "status": "completed",
+                    "mode": "deep",
+                    "runtime_sec": 52.0,
+                    "quality": {"quality_score": 0.69},
+                    "telemetry": {
+                        "disagreement_count": 2,
+                        "spawn_selected_count": 3,
+                        "spawn_dynamic_count": 1,
+                        "spawn_selected_roles": ["security", "dynamic_bioinformatics"],
+                        "spawn_dynamic_roles": ["dynamic_bioinformatics"],
+                        "spawn_role_routing": {
+                            "security": "prioritize_high_severity_and_compliance_constraints",
+                            "dynamic_bioinformatics": "prioritize_domain_specific_signals",
+                        },
+                        "spawn_role_tools": {
+                            "security": ["threat_model", "policy_checklist"],
+                            "dynamic_bioinformatics": [
+                                "context_probe:bioinformatics",
+                                "evidence_scan",
+                            ],
+                        },
+                        "spawn_min_role_score_config": 0.8,
+                        "spawn_max_specialists_config": 4,
+                        "spawn_max_dynamic_specialists_config": 2,
+                        "spawn_dynamic_enabled_config": True,
+                    },
+                },
+                {
+                    "id": "run-b",
+                    "run_id": "run-b",
+                    "status": "completed",
+                    "mode": "deep",
+                    "runtime_sec": 74.0,
+                    "quality": {"quality_score": 0.52},
+                    "telemetry": {
+                        "disagreement_count": 0,
+                        "spawn_selected_count": 1,
+                        "spawn_dynamic_count": 0,
+                        "spawn_selected_roles": ["finance"],
+                        "spawn_dynamic_roles": [],
+                        "spawn_role_routing": {
+                            "finance": "prioritize_margin_and_budget_constraints",
+                        },
+                        "spawn_role_tools": {
+                            "finance": ["unit_economics_model"],
+                        },
+                        "spawn_min_role_score_config": 1.3,
+                        "spawn_max_specialists_config": 2,
+                        "spawn_max_dynamic_specialists_config": 1,
+                        "spawn_dynamic_enabled_config": True,
+                    },
+                },
+            ],
+        }
+    ]
+    payload = train_rl_spawn_policy(
+        reports,
+        target_quality=0.65,
+        target_runtime_sec=60.0,
+        learning_rate=0.2,
+        epochs=2,
+    )
+    assert payload["optimizer"] == "rl_spawn_credit_assignment_v1"
+    assert payload["experience_count"] == 2
+    assert "spawn_policy" in payload
+    assert payload["credit_assignment"]["spawn"]["top_runs"]
+    env = payload["spawn_policy"]["policy_env"]
+    assert "RIM_SPAWN_MIN_ROLE_SCORE" in env
+    assert "RIM_SPAWN_MAX_SPECIALISTS_DEEP" in env
+    assert "RIM_SPAWN_ROLE_ROUTING_OVERRIDES" in env
+    assert payload["recommended_exports"]
+
+
 def test_save_policy_artifact_writes_expected_shape(tmp_path) -> None:  # noqa: ANN001
     path = tmp_path / "depth_policy.json"
     policy = {
@@ -731,6 +825,7 @@ def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path
     reports_dir = tmp_path / "reports"
     depth_policy_path = tmp_path / "policies" / "depth_policy.json"
     specialist_policy_path = tmp_path / "policies" / "specialist_policy.json"
+    spawn_policy_path = tmp_path / "policies" / "spawn_policy.json"
     memory_policy_path = tmp_path / "policies" / "memory_policy.json"
 
     payload = asyncio.run(
@@ -749,6 +844,7 @@ def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path
             reports_dir=reports_dir,
             depth_policy_path=depth_policy_path,
             specialist_policy_path=specialist_policy_path,
+            spawn_policy_path=spawn_policy_path,
             memory_policy_path=memory_policy_path,
         )
     )
@@ -756,7 +852,9 @@ def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path
     assert payload["optimizer"] == "rl"
     assert depth_policy_path.exists() is True
     assert specialist_policy_path.exists() is True
+    assert spawn_policy_path.exists() is True
     assert memory_policy_path.exists() is True
+    assert payload["spawn_policy_path"] == str(spawn_policy_path)
     assert payload["memory_policy_path"] == str(memory_policy_path)
     assert payload["final"]["memory_policy_path"] == str(memory_policy_path)
     assert payload["final"]["training_report_count"] >= 1

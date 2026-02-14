@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration increments): `112` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn increments): `115` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -287,11 +287,11 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Verification layer:
   deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, and baseline advanced adapters (`solver:`, `simulate:`, `data:`) are implemented, including pluggable external adapter command hooks; formal theorem/constraint tooling and production external integrations are still missing.
 - Specialization layer:
-  domain-specialist spawning and scored heuristic role-selection are implemented (with thresholded specialist budgets, rationale metadata, heuristic tool-routing contracts, offline spawn-policy training via `rim eval train-spawn-policy`, and runtime policy loading via `RIM_SPAWN_POLICY_PATH`), but no learned multi-role agent factory with adaptive tool-routing policies.
+  domain-specialist spawning and scored heuristic role-selection are implemented (with thresholded specialist budgets, rationale metadata, policy-driven tool-routing/tool-contract overrides, offline spawn-policy training via `rim eval train-spawn-policy`, RL-style spawn credit assignment via `rim eval train-rl-spawn-policy`, runtime policy loading via `RIM_SPAWN_POLICY_PATH`, and autolearn-driven online spawn policy refresh), but no fully learned generative multi-role agent factory.
 
 ### 20.3 Missing / Slacking Against SOTA Paper
 
-- Learned dynamic agent spawning and specialization (AgentSpawner-style policy-trained role/tool creation at runtime beyond current heuristic dynamic roles).
+- Fully learned dynamic agent spawning and specialization (AgentSpawner-style policy-trained role/tool generation beyond current heuristic+RL-light role/tool policy updates).
 - Full neuro-symbolic verification loops (formal theorem/constraint tooling, simulation, and external data-backed execution).
 - Online long-horizon memory quality controls and adaptive fold policy optimization.
 - Full RL-based orchestration training (PARL/ARPO/AEPO-style multi-agent policy optimization beyond current lightweight reward/advantage credit assignment).
@@ -300,7 +300,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 
 1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration and automated policy updates (`rim eval calibrate`, `rim eval calibrate-loop`, `rim eval autolearn` implemented).
 2. P0: evolve specialist arbitration from current heuristic+online+RL-light policy defaults to full RL adaptive specialist policy and dynamic role contracts.
-3. P1: evolve specialization from current offline spawn policy + heuristic dynamic contracts to learned dynamic role/tool selection contracts.
+3. P1: evolve specialization from current heuristic + offline/RL-light spawn policies to fully learned dynamic role/tool generation contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
 5. P2: evolve memory from current episodic/working/tool stores + online policy refresh to long-horizon adaptive fold-quality optimization.
 6. P3: evolve current offline heuristic policy training (`rim eval train-policy`) to learned policy optimization and credit assignment.

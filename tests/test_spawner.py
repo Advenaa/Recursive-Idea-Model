@@ -119,3 +119,81 @@ def test_spawn_plan_applies_spawn_policy_file_defaults(tmp_path, monkeypatch) ->
     assert payload["policy_path"] == str(policy_path)
     assert payload["min_role_score"] == 0.5
     assert payload["selected_count"] <= 5
+
+
+def test_spawn_plan_applies_policy_role_and_tool_overrides(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    policy_path = tmp_path / "spawn_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "policy_env": {
+                        "RIM_SPAWN_MIN_ROLE_SCORE": 2.2,
+                        "RIM_ENABLE_DYNAMIC_SPECIALISTS": 1,
+                        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": 2,
+                        "RIM_SPAWN_ROLE_BOOSTS": {"security": 2.5},
+                        "RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS": {"aodkinv": 3.2},
+                        "RIM_SPAWN_ROLE_ROUTING_OVERRIDES": {
+                            "security": "prioritize_compliance_violations",
+                            "dynamic_aodkinv": "prioritize_domain_specific_signals",
+                        },
+                        "RIM_SPAWN_ROLE_TOOL_OVERRIDES": {
+                            "security": ["compliance_matrix", "abuse_case_review"],
+                            "dynamic_aodkinv": ["context_probe:aodkinv", "counterexample_search"],
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RIM_SPAWN_POLICY_PATH", str(policy_path))
+    monkeypatch.delenv("RIM_SPAWN_ROLE_BOOSTS", raising=False)
+    monkeypatch.delenv("RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS", raising=False)
+    monkeypatch.delenv("RIM_SPAWN_ROLE_ROUTING_OVERRIDES", raising=False)
+    monkeypatch.delenv("RIM_SPAWN_ROLE_TOOL_OVERRIDES", raising=False)
+
+    payload = build_spawn_plan(
+        mode="deep",
+        domain="general",
+        constraints=["Need aodkinv controls before launch"],
+        memory_context=[],
+    )
+    roles = [item["role"] for item in payload["extra_critics"]]
+    assert "security" in roles
+    assert "dynamic_aodkinv" in roles
+    security_item = next(item for item in payload["extra_critics"] if item["role"] == "security")
+    assert security_item["tool_contract"]["routing_policy"] == "prioritize_compliance_violations"
+    assert security_item["tool_contract"]["tools"] == ["compliance_matrix", "abuse_case_review"]
+    dynamic_item = next(item for item in payload["extra_critics"] if item["role"] == "dynamic_aodkinv")
+    assert dynamic_item["tool_contract"]["tools"] == ["context_probe:aodkinv", "counterexample_search"]
+    assert payload["role_boosts"]["security"] == 2.5
+    assert payload["dynamic_token_boosts"]["aodkinv"] == 3.2
+
+
+def test_spawn_plan_env_json_maps_override_policy_maps(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    policy_path = tmp_path / "spawn_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "policy_env": {
+                        "RIM_SPAWN_ROLE_BOOSTS": {"security": 2.0},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RIM_SPAWN_POLICY_PATH", str(policy_path))
+    monkeypatch.setenv("RIM_SPAWN_ROLE_BOOSTS", '{"finance":3.0}')
+
+    payload = build_spawn_plan(
+        mode="deep",
+        domain="general",
+        constraints=["light requirement"],
+        memory_context=[],
+    )
+    roles = [item["role"] for item in payload["extra_critics"]]
+    assert "finance" in roles
+    assert payload["role_boosts"] == {"finance": 3.0}

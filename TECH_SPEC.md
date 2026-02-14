@@ -140,7 +140,7 @@ Environment variables:
 32. `RIM_SPAWN_MAX_SPECIALISTS_FAST` default `1` (max extra specialist critics in fast mode)
 33. `RIM_ENABLE_DYNAMIC_SPECIALISTS` default `1` (enable runtime-generated dynamic specialist roles from unmatched high-signal tokens)
 34. `RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS` default `2` (max dynamic specialist candidates considered per run)
-35. `RIM_SPAWN_POLICY_PATH` optional JSON policy file from `rim eval train-spawn-policy` (applies spawn defaults before env overrides)
+35. `RIM_SPAWN_POLICY_PATH` optional JSON policy file from `rim eval train-spawn-policy` / `rim eval train-rl-spawn-policy` (applies spawn defaults before env overrides, including optional JSON maps: `RIM_SPAWN_ROLE_BOOSTS`, `RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS`, `RIM_SPAWN_ROLE_ROUTING_OVERRIDES`, `RIM_SPAWN_ROLE_TOOL_OVERRIDES`)
 36. `RIM_ENABLE_VERIFICATION` default `1` in deep mode, `0` in fast mode (deterministic post-synthesis checks)
 37. `RIM_VERIFY_MIN_CONSTRAINT_OVERLAP` default `0.6` (minimum lexical overlap for constraint coverage)
 38. `RIM_VERIFY_MIN_FINDING_OVERLAP` default `0.35` (minimum lexical overlap for high-risk finding coverage)
@@ -422,7 +422,8 @@ Additional eval commands:
 11. `rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into specialization spawn-policy defaults.
 12. `rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into memory-fold policy defaults.
 13. `rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3` to run RL-style reward/advantage credit assignment and produce depth + specialist policy updates.
-14. `rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3` to run benchmark cycles and auto-update depth + specialist + memory policies from fresh telemetry.
+14. `rim eval train-rl-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3` to run RL-style reward/advantage credit assignment and produce spawn role/tool policy updates.
+15. `rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3` to run benchmark cycles and auto-update depth + specialist + spawn + memory policies from fresh telemetry.
 
 ## 9) Orchestration Logic
 
@@ -474,8 +475,9 @@ Additional eval commands:
 
 1. `specialization_spawn` builds a per-run specialist critic plan from domain, constraints, and recent memory context.
 2. The spawner selects extra critic roles via keyword-to-role rules (security, finance, scalability, UX).
-3. Deep mode can include up to three extra specialists; fast mode caps at one.
-4. Selected specialists are appended to the challenge layer as additional critic stages.
+3. Spawn policy can override role scores, dynamic-token boosts, role routing policy, and per-role tool contracts.
+4. Deep mode can include up to three extra specialists; fast mode caps at one (both configurable and policy-driven).
+5. Selected specialists are appended to the challenge layer as additional critic stages.
 
 ## 10) Prompt and Schema Discipline
 

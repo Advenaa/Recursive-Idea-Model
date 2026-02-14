@@ -134,6 +134,100 @@ def _coerce_float(value: object, default: float, *, lower: float, upper: float) 
     return max(lower, min(upper, parsed))
 
 
+def _coerce_string_map(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    parsed: dict[str, str] = {}
+    for key, item in value.items():
+        role = str(key or "").strip().lower()
+        text = str(item or "").strip()
+        if role and text:
+            parsed[role] = text
+    return parsed
+
+
+def _coerce_float_map(value: object, *, lower: float, upper: float) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    parsed: dict[str, float] = {}
+    for key, item in value.items():
+        role = str(key or "").strip().lower()
+        if not role:
+            continue
+        try:
+            number = float(item)
+        except (TypeError, ValueError):
+            continue
+        parsed[role] = round(max(lower, min(upper, number)), 4)
+    return parsed
+
+
+def _coerce_tools(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    parsed: list[str] = []
+    for item in value:
+        tool = str(item or "").strip()
+        if not tool or tool in seen:
+            continue
+        seen.add(tool)
+        parsed.append(tool)
+    return parsed
+
+
+def _coerce_tool_map(value: object) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return {}
+    parsed: dict[str, list[str]] = {}
+    for key, item in value.items():
+        role = str(key or "").strip().lower()
+        tools = _coerce_tools(item)
+        if role and tools:
+            parsed[role] = tools
+    return parsed
+
+
+def _parse_json_env(name: str) -> object | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_float_map_env(
+    name: str,
+    default: dict[str, float],
+    *,
+    lower: float,
+    upper: float,
+) -> dict[str, float]:
+    payload = _parse_json_env(name)
+    if payload is None:
+        return dict(default)
+    return _coerce_float_map(payload, lower=lower, upper=upper)
+
+
+def _parse_string_map_env(name: str, default: dict[str, str]) -> dict[str, str]:
+    payload = _parse_json_env(name)
+    if payload is None:
+        return dict(default)
+    return _coerce_string_map(payload)
+
+
+def _parse_tool_map_env(name: str, default: dict[str, list[str]]) -> dict[str, list[str]]:
+    payload = _parse_json_env(name)
+    if payload is None:
+        return {key: list(value) for key, value in default.items()}
+    return _coerce_tool_map(payload)
+
+
 def _extract_policy_env(payload: object) -> dict[str, object]:
     if not isinstance(payload, dict):
         return {}
@@ -169,6 +263,10 @@ def _load_spawn_policy_env(path_value: str) -> tuple[dict[str, object], str | No
         "RIM_SPAWN_MAX_SPECIALISTS_FAST",
         "RIM_ENABLE_DYNAMIC_SPECIALISTS",
         "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS",
+        "RIM_SPAWN_ROLE_BOOSTS",
+        "RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS",
+        "RIM_SPAWN_ROLE_ROUTING_OVERRIDES",
+        "RIM_SPAWN_ROLE_TOOL_OVERRIDES",
     }
     filtered = {key: value for key, value in env.items() if key in allowed}
     if not filtered:
@@ -194,6 +292,7 @@ def _role_score(
     constraint_counts: Counter[str],
     memory_counts: Counter[str],
     domain_hint_role: str | None,
+    role_score_boost: float = 0.0,
 ) -> tuple[float, list[str], dict[str, int]]:
     domain_hits = sum(domain_counts.get(keyword, 0) for keyword in keywords)
     constraint_hits = sum(constraint_counts.get(keyword, 0) for keyword in keywords)
@@ -211,6 +310,7 @@ def _role_score(
         + (1.0 * float(constraint_hits))
         + (0.7 * float(memory_hits))
         + role_boost
+        + float(role_score_boost)
     )
     return score, matched_keywords, {
         "domain_hits": domain_hits,
@@ -226,7 +326,9 @@ def _extract_dynamic_tokens(
     memory_counts: Counter[str],
     known_keywords: set[str],
     max_tokens: int,
+    token_boosts: dict[str, float] | None = None,
 ) -> list[tuple[str, float, dict[str, int]]]:
+    boosts = token_boosts or {}
     combined: Counter[str] = Counter()
     combined.update(domain_counts)
     combined.update(constraint_counts)
@@ -242,7 +344,14 @@ def _extract_dynamic_tokens(
         domain_hits = int(domain_counts.get(token, 0))
         constraint_hits = int(constraint_counts.get(token, 0))
         memory_hits = int(memory_counts.get(token, 0))
-        score = (2.0 * domain_hits) + (1.0 * constraint_hits) + (0.7 * memory_hits) + (0.1 * count)
+        boost = float(boosts.get(token, 0.0))
+        score = (
+            (2.0 * domain_hits)
+            + (1.0 * constraint_hits)
+            + (0.7 * memory_hits)
+            + (0.1 * count)
+            + boost
+        )
         if score <= 0.0:
             continue
         candidates.append(
@@ -281,6 +390,10 @@ def build_spawn_plan(
     max_dynamic_specialists_default = 2
     max_specialists_deep_default = 3
     max_specialists_fast_default = 1
+    role_boosts_default: dict[str, float] = {}
+    dynamic_token_boosts_default: dict[str, float] = {}
+    role_routing_overrides_default: dict[str, str] = {}
+    role_tool_overrides_default: dict[str, list[str]] = {}
     if spawn_policy_env:
         min_role_score_default = _coerce_float(
             spawn_policy_env.get("RIM_SPAWN_MIN_ROLE_SCORE"),
@@ -310,6 +423,22 @@ def build_spawn_plan(
             lower=1,
             upper=4,
         )
+        role_boosts_default = _coerce_float_map(
+            spawn_policy_env.get("RIM_SPAWN_ROLE_BOOSTS"),
+            lower=-4.0,
+            upper=4.0,
+        )
+        dynamic_token_boosts_default = _coerce_float_map(
+            spawn_policy_env.get("RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS"),
+            lower=-4.0,
+            upper=4.0,
+        )
+        role_routing_overrides_default = _coerce_string_map(
+            spawn_policy_env.get("RIM_SPAWN_ROLE_ROUTING_OVERRIDES")
+        )
+        role_tool_overrides_default = _coerce_tool_map(
+            spawn_policy_env.get("RIM_SPAWN_ROLE_TOOL_OVERRIDES")
+        )
     min_role_score = _parse_float_env(
         "RIM_SPAWN_MIN_ROLE_SCORE",
         min_role_score_default,
@@ -326,6 +455,26 @@ def build_spawn_plan(
         lower=0,
         upper=6,
     )
+    role_boosts = _parse_float_map_env(
+        "RIM_SPAWN_ROLE_BOOSTS",
+        role_boosts_default,
+        lower=-4.0,
+        upper=4.0,
+    )
+    dynamic_token_boosts = _parse_float_map_env(
+        "RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS",
+        dynamic_token_boosts_default,
+        lower=-4.0,
+        upper=4.0,
+    )
+    role_routing_overrides = _parse_string_map_env(
+        "RIM_SPAWN_ROLE_ROUTING_OVERRIDES",
+        role_routing_overrides_default,
+    )
+    role_tool_overrides = _parse_tool_map_env(
+        "RIM_SPAWN_ROLE_TOOL_OVERRIDES",
+        role_tool_overrides_default,
+    )
     scored_candidates: list[dict[str, Any]] = []
     known_keywords = {
         keyword
@@ -333,6 +482,7 @@ def build_spawn_plan(
         for keyword in keywords
     }
     for role_name, keywords, stage, critic_type in _ROLE_RULES:
+        score_boost = float(role_boosts.get(role_name, 0.0))
         score, matched_keywords, evidence = _role_score(
             role_name=role_name,
             keywords=keywords,
@@ -340,9 +490,19 @@ def build_spawn_plan(
             constraint_counts=constraint_counts,
             memory_counts=memory_counts,
             domain_hint_role=hint_role,
+            role_score_boost=score_boost,
         )
         if score < min_role_score:
             continue
+        base_contract = _ROLE_TOOL_CONTRACTS.get(role_name, {"tools": [], "routing_policy": "generic"})
+        tools = _coerce_tools(base_contract.get("tools"))
+        routing_policy = str(base_contract.get("routing_policy") or "generic")
+        routing_override = role_routing_overrides.get(role_name)
+        tools_override = role_tool_overrides.get(role_name)
+        if routing_override:
+            routing_policy = routing_override
+        if tools_override:
+            tools = list(tools_override)
         scored_candidates.append(
             {
                 "role": role_name,
@@ -351,7 +511,11 @@ def build_spawn_plan(
                 "score": round(score, 3),
                 "matched_keywords": matched_keywords[:5],
                 "evidence": evidence,
-                "tool_contract": _ROLE_TOOL_CONTRACTS.get(role_name, {"tools": [], "routing_policy": "generic"}),
+                "tool_contract": {
+                    "tools": tools,
+                    "routing_policy": routing_policy,
+                },
+                "policy_score_boost": round(score_boost, 4),
             }
         )
 
@@ -362,22 +526,35 @@ def build_spawn_plan(
             memory_counts=memory_counts,
             known_keywords=known_keywords,
             max_tokens=max_dynamic_specialists,
+            token_boosts=dynamic_token_boosts,
         )
         for token, score, evidence in dynamic_tokens:
             if score < min_role_score:
                 continue
+            dynamic_role = f"dynamic_{token}"
+            routing_policy = (
+                role_routing_overrides.get(dynamic_role)
+                or role_routing_overrides.get(token)
+                or "prioritize_domain_specific_signals"
+            )
+            tools = role_tool_overrides.get(dynamic_role) or role_tool_overrides.get(token) or [
+                f"context_probe:{token}",
+                "evidence_scan",
+                "counterexample_search",
+            ]
             scored_candidates.append(
                 {
-                    "role": f"dynamic_{token}",
+                    "role": dynamic_role,
                     "stage": f"critic_dynamic_{token}",
                     "critic_type": f"dynamic_{token}",
                     "score": score,
                     "matched_keywords": [token],
                     "evidence": evidence,
                     "tool_contract": {
-                        "tools": [f"context_probe:{token}", "evidence_scan", "counterexample_search"],
-                        "routing_policy": "prioritize_domain_specific_signals",
+                        "tools": list(tools),
+                        "routing_policy": routing_policy,
                     },
+                    "policy_score_boost": round(float(dynamic_token_boosts.get(token, 0.0)), 4),
                     "dynamic": True,
                 }
             )
@@ -414,8 +591,14 @@ def build_spawn_plan(
         "selected_count": len(selected),
         "candidate_count": len(scored_candidates),
         "min_role_score": min_role_score,
+        "max_specialists": max_specialists,
+        "max_dynamic_specialists": max_dynamic_specialists,
         "domain_hint_role": hint_role,
         "dynamic_enabled": enable_dynamic_specialists,
+        "role_boosts": role_boosts,
+        "dynamic_token_boosts": dynamic_token_boosts,
+        "role_routing_overrides": role_routing_overrides,
+        "role_tool_overrides": role_tool_overrides,
         "policy_applied": bool(spawn_policy_env),
         "policy_path": spawn_policy_path or None,
         "policy_error": spawn_policy_error,

@@ -190,6 +190,24 @@ def _to_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _normalize_role(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _normalize_tools(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    tools: list[str] = []
+    for item in value:
+        parsed = str(item or "").strip()
+        if not parsed or parsed in seen:
+            continue
+        seen.add(parsed)
+        tools.append(parsed)
+    return tools
+
+
 def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
     getter = getattr(orchestrator, "get_run_logs", None)
     if getter is None or not callable(getter):
@@ -213,6 +231,17 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
         "specialist_min_confidence_config": 0.0,
         "spawn_selected_count": 0,
         "spawn_dynamic_count": 0,
+        "spawn_selected_roles": [],
+        "spawn_dynamic_roles": [],
+        "spawn_role_routing": {},
+        "spawn_role_tools": {},
+        "spawn_min_role_score_config": 0.0,
+        "spawn_max_specialists_config": 0,
+        "spawn_max_dynamic_specialists_config": 0,
+        "spawn_dynamic_enabled_config": False,
+        "spawn_policy_applied_config": False,
+        "spawn_role_boosts_config": {},
+        "spawn_dynamic_token_boosts_config": {},
         "depth_cycles_observed": 0,
         "depth_max_cycles_config": 0,
         "depth_min_confidence_config": 0.0,
@@ -225,6 +254,12 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
     }
     memory_fold_novelty_total = 0.0
     memory_fold_duplicate_total = 0.0
+    spawn_selected_roles: set[str] = set()
+    spawn_dynamic_roles: set[str] = set()
+    spawn_role_routing: dict[str, str] = {}
+    spawn_role_tools: dict[str, list[str]] = {}
+    spawn_role_boosts: dict[str, float] = {}
+    spawn_dynamic_token_boosts: dict[str, float] = {}
     for item in logs:
         stage = str(getattr(item, "stage", "")).strip().lower()
         meta = getattr(item, "meta", None)
@@ -303,6 +338,63 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
                 telemetry["spawn_dynamic_count"],
                 len(dynamic),
             )
+            telemetry["spawn_min_role_score_config"] = max(
+                telemetry["spawn_min_role_score_config"],
+                _to_float(meta.get("min_role_score"), 0.0),
+            )
+            telemetry["spawn_max_specialists_config"] = max(
+                telemetry["spawn_max_specialists_config"],
+                _to_int(meta.get("max_specialists"), 0),
+            )
+            telemetry["spawn_max_dynamic_specialists_config"] = max(
+                telemetry["spawn_max_dynamic_specialists_config"],
+                _to_int(meta.get("max_dynamic_specialists"), 0),
+            )
+            telemetry["spawn_dynamic_enabled_config"] = (
+                telemetry["spawn_dynamic_enabled_config"]
+                or bool(meta.get("dynamic_enabled", False))
+            )
+            telemetry["spawn_policy_applied_config"] = (
+                telemetry["spawn_policy_applied_config"]
+                or bool(meta.get("policy_applied", False))
+            )
+            role_boosts_raw = meta.get("role_boosts")
+            if isinstance(role_boosts_raw, dict):
+                for role_name, boost in role_boosts_raw.items():
+                    normalized_role = _normalize_role(role_name)
+                    if not normalized_role:
+                        continue
+                    spawn_role_boosts[normalized_role] = max(
+                        spawn_role_boosts.get(normalized_role, 0.0),
+                        round(_to_float(boost, 0.0), 4),
+                    )
+            dynamic_boosts_raw = meta.get("dynamic_token_boosts")
+            if isinstance(dynamic_boosts_raw, dict):
+                for token_name, boost in dynamic_boosts_raw.items():
+                    normalized_token = _normalize_role(token_name)
+                    if not normalized_token:
+                        continue
+                    spawn_dynamic_token_boosts[normalized_token] = max(
+                        spawn_dynamic_token_boosts.get(normalized_token, 0.0),
+                        round(_to_float(boost, 0.0), 4),
+                    )
+            for entry in extra:
+                if not isinstance(entry, dict):
+                    continue
+                role_name = _normalize_role(entry.get("role"))
+                if not role_name:
+                    continue
+                spawn_selected_roles.add(role_name)
+                if bool(entry.get("dynamic")):
+                    spawn_dynamic_roles.add(role_name)
+                tool_contract = entry.get("tool_contract")
+                if isinstance(tool_contract, dict):
+                    routing_policy = str(tool_contract.get("routing_policy") or "").strip()
+                    if routing_policy:
+                        spawn_role_routing[role_name] = routing_policy
+                    tools = _normalize_tools(tool_contract.get("tools"))
+                    if tools:
+                        spawn_role_tools[role_name] = tools
             continue
         if stage == "memory_fold":
             telemetry["memory_fold_count"] += 1
@@ -315,6 +407,21 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
         folds = float(telemetry["memory_fold_count"])
         telemetry["memory_fold_avg_novelty_ratio"] = round(memory_fold_novelty_total / folds, 4)
         telemetry["memory_fold_avg_duplicate_ratio"] = round(memory_fold_duplicate_total / folds, 4)
+    telemetry["spawn_selected_roles"] = sorted(spawn_selected_roles)
+    telemetry["spawn_dynamic_roles"] = sorted(spawn_dynamic_roles)
+    telemetry["spawn_role_routing"] = {
+        key: spawn_role_routing[key] for key in sorted(spawn_role_routing)
+    }
+    telemetry["spawn_role_tools"] = {
+        key: spawn_role_tools[key] for key in sorted(spawn_role_tools)
+    }
+    telemetry["spawn_role_boosts_config"] = {
+        key: spawn_role_boosts[key] for key in sorted(spawn_role_boosts)
+    }
+    telemetry["spawn_dynamic_token_boosts_config"] = {
+        key: spawn_dynamic_token_boosts[key]
+        for key in sorted(spawn_dynamic_token_boosts)
+    }
     if not any(value for value in telemetry.values()):
         return {}
     return telemetry
@@ -799,6 +906,9 @@ def calibration_env_exports(calibration: dict[str, Any]) -> list[str]:
         value = env[key]
         if isinstance(value, float):
             lines.append(f"export {key}={value:.3f}".rstrip("0").rstrip("."))
+        elif isinstance(value, (dict, list)):
+            serialized = json.dumps(value, separators=(",", ":"), sort_keys=True)
+            lines.append(f"export {key}='{serialized}'")
         else:
             lines.append(f"export {key}={value}")
     return lines
@@ -1977,6 +2087,148 @@ def _blend_memory_policy_env(
     }
 
 
+def _normalize_float_map(
+    value: Any,
+    *,
+    lower: float = -4.0,
+    upper: float = 4.0,
+) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, float] = {}
+    for key, item in value.items():
+        role = _normalize_role(key)
+        if not role:
+            continue
+        normalized[role] = round(_clamp_float(_to_float(item, 0.0), lower, upper), 4)
+    return normalized
+
+
+def _normalize_string_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, item in value.items():
+        role = _normalize_role(key)
+        policy = str(item or "").strip()
+        if role and policy:
+            normalized[role] = policy
+    return normalized
+
+
+def _normalize_tool_map(value: Any) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, list[str]] = {}
+    for key, item in value.items():
+        role = _normalize_role(key)
+        tools = _normalize_tools(item)
+        if role and tools:
+            normalized[role] = tools
+    return normalized
+
+
+def _blend_spawn_policy_env(
+    *,
+    prior_env: dict[str, Any] | None,
+    fresh_env: dict[str, Any],
+    learning_rate: float,
+) -> dict[str, Any]:
+    prior = prior_env or {}
+    alpha = _clamp_float(float(learning_rate), 0.0, 1.0)
+    min_role_score = (1.0 - alpha) * _to_float(prior.get("RIM_SPAWN_MIN_ROLE_SCORE"), 1.0)
+    min_role_score += alpha * _to_float(fresh_env.get("RIM_SPAWN_MIN_ROLE_SCORE"), 1.0)
+    max_specialists_deep = (1.0 - alpha) * _to_float(
+        prior.get("RIM_SPAWN_MAX_SPECIALISTS_DEEP"),
+        3.0,
+    )
+    max_specialists_deep += alpha * _to_float(
+        fresh_env.get("RIM_SPAWN_MAX_SPECIALISTS_DEEP"),
+        3.0,
+    )
+    max_specialists_fast = (1.0 - alpha) * _to_float(
+        prior.get("RIM_SPAWN_MAX_SPECIALISTS_FAST"),
+        1.0,
+    )
+    max_specialists_fast += alpha * _to_float(
+        fresh_env.get("RIM_SPAWN_MAX_SPECIALISTS_FAST"),
+        1.0,
+    )
+    enable_dynamic_score = (1.0 - alpha) * _to_float(
+        prior.get("RIM_ENABLE_DYNAMIC_SPECIALISTS"),
+        1.0,
+    )
+    enable_dynamic_score += alpha * _to_float(
+        fresh_env.get("RIM_ENABLE_DYNAMIC_SPECIALISTS"),
+        1.0,
+    )
+    max_dynamic_specialists = (1.0 - alpha) * _to_float(
+        prior.get("RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"),
+        2.0,
+    )
+    max_dynamic_specialists += alpha * _to_float(
+        fresh_env.get("RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"),
+        2.0,
+    )
+    role_boosts_prior = _normalize_float_map(prior.get("RIM_SPAWN_ROLE_BOOSTS"))
+    role_boosts_fresh = _normalize_float_map(fresh_env.get("RIM_SPAWN_ROLE_BOOSTS"))
+    role_boosts: dict[str, float] = {}
+    for key in sorted(set(role_boosts_prior) | set(role_boosts_fresh)):
+        blended = ((1.0 - alpha) * role_boosts_prior.get(key, 0.0)) + (
+            alpha * role_boosts_fresh.get(key, 0.0)
+        )
+        if abs(blended) >= 0.05:
+            role_boosts[key] = round(_clamp_float(blended, -4.0, 4.0), 4)
+    dynamic_boosts_prior = _normalize_float_map(prior.get("RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS"))
+    dynamic_boosts_fresh = _normalize_float_map(
+        fresh_env.get("RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS")
+    )
+    dynamic_boosts: dict[str, float] = {}
+    for key in sorted(set(dynamic_boosts_prior) | set(dynamic_boosts_fresh)):
+        blended = ((1.0 - alpha) * dynamic_boosts_prior.get(key, 0.0)) + (
+            alpha * dynamic_boosts_fresh.get(key, 0.0)
+        )
+        if abs(blended) >= 0.05:
+            dynamic_boosts[key] = round(_clamp_float(blended, -4.0, 4.0), 4)
+    routing_prior = _normalize_string_map(prior.get("RIM_SPAWN_ROLE_ROUTING_OVERRIDES"))
+    routing_fresh = _normalize_string_map(fresh_env.get("RIM_SPAWN_ROLE_ROUTING_OVERRIDES"))
+    tool_prior = _normalize_tool_map(prior.get("RIM_SPAWN_ROLE_TOOL_OVERRIDES"))
+    tool_fresh = _normalize_tool_map(fresh_env.get("RIM_SPAWN_ROLE_TOOL_OVERRIDES"))
+
+    blended_env: dict[str, Any] = {
+        "RIM_SPAWN_MIN_ROLE_SCORE": round(_clamp_float(min_role_score, 0.4, 3.0), 3),
+        "RIM_SPAWN_MAX_SPECIALISTS_DEEP": _clamp_int(
+            int(round(max_specialists_deep)),
+            1,
+            8,
+        ),
+        "RIM_SPAWN_MAX_SPECIALISTS_FAST": _clamp_int(
+            int(round(max_specialists_fast)),
+            1,
+            4,
+        ),
+        "RIM_ENABLE_DYNAMIC_SPECIALISTS": 1 if enable_dynamic_score >= 0.5 else 0,
+        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": _clamp_int(
+            int(round(max_dynamic_specialists)),
+            0,
+            6,
+        ),
+    }
+    if blended_env["RIM_ENABLE_DYNAMIC_SPECIALISTS"] == 0:
+        blended_env["RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"] = 0
+    if role_boosts:
+        blended_env["RIM_SPAWN_ROLE_BOOSTS"] = role_boosts
+    if dynamic_boosts:
+        blended_env["RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS"] = dynamic_boosts
+    combined_routing = {**routing_prior, **routing_fresh}
+    if combined_routing:
+        blended_env["RIM_SPAWN_ROLE_ROUTING_OVERRIDES"] = combined_routing
+    combined_tools = {**tool_prior, **tool_fresh}
+    if combined_tools:
+        blended_env["RIM_SPAWN_ROLE_TOOL_OVERRIDES"] = combined_tools
+    return blended_env
+
+
 def _valid_training_reports(
     reports: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -2100,6 +2352,47 @@ def train_online_memory_policy(
         "target_quality": target_quality,
         "target_runtime_sec": target_runtime_sec,
         "memory_policy": payload,
+        "recommended_exports": payload["recommended_exports"],
+    }
+
+
+def train_online_spawn_policy(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+    learning_rate: float = 0.35,
+    prior_spawn_policy_env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    valid_reports, report_ids = _valid_training_reports(reports)
+    candidate = train_spawn_policy(
+        valid_reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+    )
+    alpha = _clamp_float(float(learning_rate), 0.0, 1.0)
+    spawn_env = _blend_spawn_policy_env(
+        prior_env=prior_spawn_policy_env,
+        fresh_env=dict(candidate.get("policy_env") or {}),
+        learning_rate=alpha,
+    )
+    payload = {
+        **candidate,
+        "policy_env": spawn_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": spawn_env}),
+        "blend": {
+            "learning_rate": alpha,
+            "prior_policy_env": prior_spawn_policy_env or {},
+            "candidate_policy_env": candidate.get("policy_env") or {},
+        },
+    }
+    return {
+        "report_count": len(valid_reports),
+        "report_ids": report_ids,
+        "learning_rate": alpha,
+        "target_quality": target_quality,
+        "target_runtime_sec": target_runtime_sec,
+        "spawn_policy": payload,
         "recommended_exports": payload["recommended_exports"],
     }
 
@@ -2434,6 +2727,435 @@ def train_rl_depth_and_arbitration_policies(
     }
 
 
+def _rl_spawn_experiences(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float,
+    target_runtime_sec: float | None,
+    runtime_weight: float,
+    failure_penalty: float,
+) -> list[dict[str, Any]]:
+    experiences: list[dict[str, Any]] = []
+    runtime_weight_normalized = _clamp_float(float(runtime_weight), 0.0, 2.0)
+    failure_penalty_normalized = _clamp_float(float(failure_penalty), 0.0, 4.0)
+    for report in reports:
+        runs = report.get("runs")
+        if not isinstance(runs, list):
+            continue
+        mode_default = str(report.get("mode") or "").strip().lower()
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            status = str(run.get("status") or "").strip().lower()
+            quality_payload = run.get("quality")
+            quality_score = (
+                float(quality_payload.get("quality_score"))
+                if isinstance(quality_payload, dict)
+                and isinstance(quality_payload.get("quality_score"), (int, float))
+                else 0.0
+            )
+            runtime_sec = _to_float(run.get("runtime_sec"), 0.0)
+            runtime_pressure = 0.0
+            if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+                runtime_pressure = max(
+                    0.0,
+                    (runtime_sec - float(target_runtime_sec)) / float(target_runtime_sec),
+                )
+            mode = str(run.get("mode") or mode_default).strip().lower()
+            telemetry = run.get("telemetry")
+            telemetry_dict = telemetry if isinstance(telemetry, dict) else {}
+            disagreement = _to_float(telemetry_dict.get("disagreement_count"), 0.0)
+            selected_count = _to_float(telemetry_dict.get("spawn_selected_count"), 0.0)
+            dynamic_count = _to_float(telemetry_dict.get("spawn_dynamic_count"), 0.0)
+            min_role_score = _to_float(
+                telemetry_dict.get("spawn_min_role_score_config"),
+                1.0,
+            )
+            if min_role_score <= 0:
+                min_role_score = 1.0
+            max_specialists = _to_float(
+                telemetry_dict.get("spawn_max_specialists_config"),
+                3.0 if mode == "deep" else 1.0,
+            )
+            max_dynamic_specialists = _to_float(
+                telemetry_dict.get("spawn_max_dynamic_specialists_config"),
+                2.0,
+            )
+            dynamic_enabled = _to_float(
+                1.0 if telemetry_dict.get("spawn_dynamic_enabled_config") else 0.0,
+                0.0,
+            )
+            selected_roles_raw = telemetry_dict.get("spawn_selected_roles")
+            selected_roles = [
+                _normalize_role(item)
+                for item in list(selected_roles_raw or [])
+                if _normalize_role(item)
+            ]
+            dynamic_roles_raw = telemetry_dict.get("spawn_dynamic_roles")
+            dynamic_roles = [
+                _normalize_role(item)
+                for item in list(dynamic_roles_raw or [])
+                if _normalize_role(item)
+            ]
+            role_routing = _normalize_string_map(telemetry_dict.get("spawn_role_routing"))
+            role_tools = _normalize_tool_map(telemetry_dict.get("spawn_role_tools"))
+
+            reward = quality_score - (runtime_weight_normalized * runtime_pressure)
+            if status in {"failed", "canceled"}:
+                reward -= failure_penalty_normalized
+            if status == "partial":
+                reward -= (0.5 * failure_penalty_normalized)
+            experiences.append(
+                {
+                    "run_id": str(run.get("run_id") or run.get("id") or f"run-{len(experiences)+1}"),
+                    "status": status,
+                    "mode": mode if mode in {"deep", "fast"} else "deep",
+                    "quality_score": quality_score,
+                    "runtime_sec": runtime_sec,
+                    "runtime_pressure": runtime_pressure,
+                    "quality_gap": float(target_quality) - quality_score,
+                    "disagreement": disagreement,
+                    "reward": reward,
+                    "selected_roles": selected_roles,
+                    "dynamic_roles": dynamic_roles,
+                    "role_routing": role_routing,
+                    "role_tools": role_tools,
+                    "actions": {
+                        "selected_count": selected_count,
+                        "dynamic_count": dynamic_count,
+                        "min_role_score": min_role_score,
+                        "max_specialists": max_specialists,
+                        "max_dynamic_specialists": max_dynamic_specialists,
+                        "dynamic_enabled": dynamic_enabled,
+                    },
+                }
+            )
+    return experiences
+
+
+def train_rl_spawn_policy(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+    learning_rate: float = 0.18,
+    epochs: int = 3,
+    reward_runtime_weight: float = 0.35,
+    reward_failure_penalty: float = 1.0,
+    prior_spawn_policy_env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    valid_reports, report_ids = _valid_training_reports(reports)
+    experiences = _rl_spawn_experiences(
+        valid_reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+        runtime_weight=reward_runtime_weight,
+        failure_penalty=reward_failure_penalty,
+    )
+    alpha = _clamp_float(float(learning_rate), 0.01, 1.0)
+    epoch_count = _clamp_int(int(epochs), 1, 50)
+    runtime_weight_normalized = _clamp_float(float(reward_runtime_weight), 0.0, 2.0)
+    failure_penalty_normalized = _clamp_float(float(reward_failure_penalty), 0.0, 4.0)
+    prior = prior_spawn_policy_env or {}
+
+    spawn = {
+        "min_role_score": _to_float(prior.get("RIM_SPAWN_MIN_ROLE_SCORE"), 1.0),
+        "max_specialists_deep": _to_float(prior.get("RIM_SPAWN_MAX_SPECIALISTS_DEEP"), 3.0),
+        "max_specialists_fast": _to_float(prior.get("RIM_SPAWN_MAX_SPECIALISTS_FAST"), 1.0),
+        "max_dynamic_specialists": _to_float(
+            prior.get("RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"),
+            2.0,
+        ),
+        "dynamic_enabled_score": _to_float(prior.get("RIM_ENABLE_DYNAMIC_SPECIALISTS"), 1.0),
+    }
+    role_boosts = _normalize_float_map(prior.get("RIM_SPAWN_ROLE_BOOSTS"))
+    dynamic_token_boosts = _normalize_float_map(prior.get("RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS"))
+    routing_overrides = _normalize_string_map(prior.get("RIM_SPAWN_ROLE_ROUTING_OVERRIDES"))
+    tool_overrides = _normalize_tool_map(prior.get("RIM_SPAWN_ROLE_TOOL_OVERRIDES"))
+
+    if not experiences:
+        spawn_env = _blend_spawn_policy_env(
+            prior_env=prior_spawn_policy_env,
+            fresh_env={},
+            learning_rate=0.0,
+        )
+        payload = {
+            "policy_env": spawn_env,
+            "recommended_exports": calibration_env_exports({"recommended_env": spawn_env}),
+            "rationale": ["No eligible run experiences; returning prior/default spawn policy."],
+            "optimizer": "rl_spawn_credit_assignment_v1",
+            "epochs": epoch_count,
+        }
+        return {
+            "optimizer": "rl_spawn_credit_assignment_v1",
+            "report_count": len(valid_reports),
+            "report_ids": report_ids,
+            "experience_count": 0,
+            "learning_rate": alpha,
+            "epochs": epoch_count,
+            "target_quality": target_quality,
+            "target_runtime_sec": target_runtime_sec,
+            "spawn_policy": payload,
+            "credit_assignment": {
+                "spawn": {"positive": 0.0, "negative": 0.0, "top_runs": []},
+                "role_boosts": [],
+                "dynamic_token_boosts": [],
+            },
+            "recommended_exports": payload["recommended_exports"],
+        }
+
+    rewards = [float(item["reward"]) for item in experiences]
+    reward_baseline = sum(rewards) / len(rewards)
+    spawn_credits: list[dict[str, Any]] = []
+    role_credit_totals: dict[str, float] = {}
+    dynamic_token_credit_totals: dict[str, float] = {}
+    routing_votes: dict[str, dict[str, float]] = {}
+    tool_votes: dict[str, dict[str, float]] = {}
+
+    for _epoch in range(epoch_count):
+        for exp in experiences:
+            reward = _to_float(exp.get("reward"), 0.0)
+            advantage = reward - reward_baseline
+            runtime_pressure = _to_float(exp.get("runtime_pressure"), 0.0)
+            quality_gap = _to_float(exp.get("quality_gap"), 0.0)
+            disagreement = _to_float(exp.get("disagreement"), 0.0)
+            actions = exp.get("actions")
+            action_payload = actions if isinstance(actions, dict) else {}
+            selected_count = _to_float(action_payload.get("selected_count"), 0.0)
+            dynamic_count = _to_float(action_payload.get("dynamic_count"), 0.0)
+            min_role_score_action = _to_float(action_payload.get("min_role_score"), 1.0)
+            max_specialists_action = _to_float(action_payload.get("max_specialists"), 1.0)
+            max_dynamic_action = _to_float(
+                action_payload.get("max_dynamic_specialists"),
+                0.0,
+            )
+            dynamic_enabled_action = _to_float(action_payload.get("dynamic_enabled"), 0.0)
+            action_intensity = max(
+                0.0,
+                (0.22 * max(max_specialists_action - 1.0, 0.0))
+                + (0.16 * max(max_dynamic_action, 0.0))
+                + (0.12 * max(dynamic_enabled_action, 0.0))
+                + (0.14 * max(1.0 - min_role_score_action, 0.0)),
+            )
+            spawn_signal = quality_gap + (0.35 * disagreement) - (0.75 * runtime_pressure)
+            spawn_credit = advantage * spawn_signal * (1.0 + action_intensity)
+
+            spawn["min_role_score"] += alpha * (-0.28 * spawn_credit)
+            spawn["max_specialists_deep"] += alpha * (0.95 * spawn_credit)
+            spawn["max_specialists_fast"] += alpha * (0.45 * spawn_credit)
+            spawn["max_dynamic_specialists"] += alpha * (0.65 * spawn_credit)
+            spawn["dynamic_enabled_score"] += alpha * (0.32 * spawn_credit)
+
+            spawn["min_role_score"] = _clamp_float(spawn["min_role_score"], 0.4, 3.0)
+            spawn["max_specialists_deep"] = _clamp_float(
+                spawn["max_specialists_deep"],
+                1.0,
+                8.0,
+            )
+            spawn["max_specialists_fast"] = _clamp_float(
+                spawn["max_specialists_fast"],
+                1.0,
+                4.0,
+            )
+            spawn["max_dynamic_specialists"] = _clamp_float(
+                spawn["max_dynamic_specialists"],
+                0.0,
+                6.0,
+            )
+            spawn["dynamic_enabled_score"] = _clamp_float(
+                spawn["dynamic_enabled_score"],
+                0.0,
+                1.0,
+            )
+
+            selected_roles = list(exp.get("selected_roles") or [])
+            role_credit_base = advantage * (1.0 - (0.45 * runtime_pressure))
+            role_credit_each = role_credit_base / max(1.0, float(len(selected_roles)))
+            role_routing = _normalize_string_map(exp.get("role_routing"))
+            role_tools = _normalize_tool_map(exp.get("role_tools"))
+            for role in selected_roles:
+                normalized_role = _normalize_role(role)
+                if not normalized_role:
+                    continue
+                if normalized_role.startswith("dynamic_"):
+                    token = normalized_role[len("dynamic_") :]
+                    if token:
+                        dynamic_token_boosts[token] = round(
+                            _clamp_float(
+                                _to_float(dynamic_token_boosts.get(token), 0.0)
+                                + (alpha * 0.35 * role_credit_each),
+                                -4.0,
+                                4.0,
+                            ),
+                            4,
+                        )
+                        dynamic_token_credit_totals[token] = _to_float(
+                            dynamic_token_credit_totals.get(token),
+                            0.0,
+                        ) + role_credit_each
+                    continue
+                role_boosts[normalized_role] = round(
+                    _clamp_float(
+                        _to_float(role_boosts.get(normalized_role), 0.0)
+                        + (alpha * 0.35 * role_credit_each),
+                        -4.0,
+                        4.0,
+                    ),
+                    4,
+                )
+                role_credit_totals[normalized_role] = _to_float(
+                    role_credit_totals.get(normalized_role),
+                    0.0,
+                ) + role_credit_each
+                route = role_routing.get(normalized_role)
+                if route and role_credit_each > 0.0:
+                    role_votes = routing_votes.setdefault(normalized_role, {})
+                    role_votes[route] = _to_float(role_votes.get(route), 0.0) + role_credit_each
+                tools = role_tools.get(normalized_role)
+                if tools and role_credit_each > 0.0:
+                    signature = "||".join(tools[:8])
+                    role_tool_votes = tool_votes.setdefault(normalized_role, {})
+                    role_tool_votes[signature] = _to_float(
+                        role_tool_votes.get(signature),
+                        0.0,
+                    ) + role_credit_each
+
+            spawn_credits.append(
+                {
+                    "run_id": exp["run_id"],
+                    "credit": round(spawn_credit, 6),
+                    "advantage": round(advantage, 6),
+                    "signal": round(spawn_signal, 6),
+                    "action_intensity": round(action_intensity, 6),
+                }
+            )
+
+    role_boosts = {
+        key: value
+        for key, value in sorted(
+            role_boosts.items(),
+            key=lambda item: (abs(float(item[1])), item[0]),
+            reverse=True,
+        )[:24]
+        if abs(_to_float(value, 0.0)) >= 0.05
+    }
+    dynamic_token_boosts = {
+        key: value
+        for key, value in sorted(
+            dynamic_token_boosts.items(),
+            key=lambda item: (abs(float(item[1])), item[0]),
+            reverse=True,
+        )[:32]
+        if abs(_to_float(value, 0.0)) >= 0.05
+    }
+    for role, votes in routing_votes.items():
+        if not votes:
+            continue
+        winner = max(votes.items(), key=lambda item: item[1])
+        if winner[1] > 0:
+            routing_overrides[role] = winner[0]
+    for role, votes in tool_votes.items():
+        if not votes:
+            continue
+        winner = max(votes.items(), key=lambda item: item[1])
+        if winner[1] > 0 and winner[0]:
+            tools = [item for item in winner[0].split("||") if item]
+            if tools:
+                tool_overrides[role] = tools
+
+    spawn_enable_dynamic = 1 if spawn["dynamic_enabled_score"] >= 0.5 else 0
+    spawn_env: dict[str, Any] = {
+        "RIM_SPAWN_MIN_ROLE_SCORE": round(spawn["min_role_score"], 3),
+        "RIM_SPAWN_MAX_SPECIALISTS_DEEP": _clamp_int(
+            int(round(spawn["max_specialists_deep"])),
+            1,
+            8,
+        ),
+        "RIM_SPAWN_MAX_SPECIALISTS_FAST": _clamp_int(
+            int(round(spawn["max_specialists_fast"])),
+            1,
+            4,
+        ),
+        "RIM_ENABLE_DYNAMIC_SPECIALISTS": spawn_enable_dynamic,
+        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": _clamp_int(
+            int(round(spawn["max_dynamic_specialists"])),
+            0,
+            6,
+        ),
+    }
+    if spawn_enable_dynamic == 0:
+        spawn_env["RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"] = 0
+    if role_boosts:
+        spawn_env["RIM_SPAWN_ROLE_BOOSTS"] = role_boosts
+    if dynamic_token_boosts:
+        spawn_env["RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS"] = dynamic_token_boosts
+    if routing_overrides:
+        spawn_env["RIM_SPAWN_ROLE_ROUTING_OVERRIDES"] = routing_overrides
+    if tool_overrides:
+        spawn_env["RIM_SPAWN_ROLE_TOOL_OVERRIDES"] = tool_overrides
+
+    def _credit_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+        positive = sum(float(item["credit"]) for item in items if float(item["credit"]) > 0.0)
+        negative = sum(float(item["credit"]) for item in items if float(item["credit"]) < 0.0)
+        ranked = sorted(items, key=lambda item: abs(float(item["credit"])), reverse=True)[:8]
+        return {
+            "positive": round(positive, 6),
+            "negative": round(negative, 6),
+            "top_runs": ranked,
+        }
+
+    role_credit_ranked = sorted(
+        (
+            {"role": key, "credit": round(value, 6)}
+            for key, value in role_credit_totals.items()
+        ),
+        key=lambda item: abs(float(item["credit"])),
+        reverse=True,
+    )[:12]
+    token_credit_ranked = sorted(
+        (
+            {"token": key, "credit": round(value, 6)}
+            for key, value in dynamic_token_credit_totals.items()
+        ),
+        key=lambda item: abs(float(item["credit"])),
+        reverse=True,
+    )[:12]
+
+    spawn_payload = {
+        "policy_env": spawn_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": spawn_env}),
+        "rationale": [
+            "Spawn policy updated with reward/advantage credits for role breadth and routing.",
+        ],
+        "optimizer": "rl_spawn_credit_assignment_v1",
+        "epochs": epoch_count,
+    }
+    return {
+        "optimizer": "rl_spawn_credit_assignment_v1",
+        "report_count": len(valid_reports),
+        "report_ids": report_ids,
+        "experience_count": len(experiences),
+        "learning_rate": alpha,
+        "epochs": epoch_count,
+        "target_quality": target_quality,
+        "target_runtime_sec": target_runtime_sec,
+        "reward_summary": {
+            "mean_reward": round(reward_baseline, 6),
+            "max_reward": round(max(rewards), 6),
+            "min_reward": round(min(rewards), 6),
+            "runtime_weight": runtime_weight_normalized,
+            "failure_penalty": failure_penalty_normalized,
+        },
+        "spawn_policy": spawn_payload,
+        "credit_assignment": {
+            "spawn": _credit_summary(spawn_credits),
+            "role_boosts": role_credit_ranked,
+            "dynamic_token_boosts": token_credit_ranked,
+        },
+        "recommended_exports": spawn_payload["recommended_exports"],
+    }
+
+
 def _load_recent_reports(
     *,
     reports_dir: Path,
@@ -2475,6 +3197,7 @@ async def run_online_depth_arbitration_learning_loop(
     reports_dir: Path = DEFAULT_REPORTS_DIR,
     depth_policy_path: Path = DEFAULT_POLICIES_DIR / "depth_policy.json",
     specialist_policy_path: Path = DEFAULT_POLICIES_DIR / "specialist_policy.json",
+    spawn_policy_path: Path = DEFAULT_POLICIES_DIR / "spawn_policy.json",
     memory_policy_path: Path = DEFAULT_POLICIES_DIR / "memory_policy.json",
 ) -> dict[str, Any]:
     cycles = _clamp_int(int(iterations), 1, 24)
@@ -2489,13 +3212,16 @@ async def run_online_depth_arbitration_learning_loop(
     reports_dir.mkdir(parents=True, exist_ok=True)
     depth_policy_path.parent.mkdir(parents=True, exist_ok=True)
     specialist_policy_path.parent.mkdir(parents=True, exist_ok=True)
+    spawn_policy_path.parent.mkdir(parents=True, exist_ok=True)
     memory_policy_path.parent.mkdir(parents=True, exist_ok=True)
 
     previous_depth_path = os.getenv("RIM_DEPTH_POLICY_PATH")
     previous_specialist_path = os.getenv("RIM_SPECIALIST_POLICY_PATH")
+    previous_spawn_path = os.getenv("RIM_SPAWN_POLICY_PATH")
     previous_memory_path = os.getenv("RIM_MEMORY_POLICY_PATH")
     os.environ["RIM_DEPTH_POLICY_PATH"] = str(depth_policy_path)
     os.environ["RIM_SPECIALIST_POLICY_PATH"] = str(specialist_policy_path)
+    os.environ["RIM_SPAWN_POLICY_PATH"] = str(spawn_policy_path)
     os.environ["RIM_MEMORY_POLICY_PATH"] = str(memory_policy_path)
     cycle_outputs: list[dict[str, Any]] = []
     try:
@@ -2537,6 +3263,26 @@ async def run_online_depth_arbitration_learning_loop(
                     prior_depth_policy_env=prior_depth_env,
                     prior_specialist_policy_env=prior_specialist_env,
                 )
+            prior_spawn_env = load_policy_env(spawn_policy_path)
+            if optimizer_name == "rl":
+                spawn_learning = train_rl_spawn_policy(
+                    training_reports,
+                    target_quality=target_quality,
+                    target_runtime_sec=target_runtime_sec,
+                    learning_rate=alpha,
+                    epochs=normalized_rl_epochs,
+                    reward_runtime_weight=normalized_rl_runtime_weight,
+                    reward_failure_penalty=normalized_rl_failure_penalty,
+                    prior_spawn_policy_env=prior_spawn_env,
+                )
+            else:
+                spawn_learning = train_online_spawn_policy(
+                    training_reports,
+                    target_quality=target_quality,
+                    target_runtime_sec=target_runtime_sec,
+                    learning_rate=alpha,
+                    prior_spawn_policy_env=prior_spawn_env,
+                )
             prior_memory_env = load_policy_env(memory_policy_path)
             memory_learning = train_online_memory_policy(
                 training_reports,
@@ -2562,6 +3308,18 @@ async def run_online_depth_arbitration_learning_loop(
                 policy_kind="specialist_arbitration",
                 source_reports=training_paths,
                 output_path=specialist_policy_path,
+                learning_meta={
+                    "cycle": cycle,
+                    "iterations": cycles,
+                    "learning_rate": alpha,
+                    "report_path": str(report_path),
+                },
+            )
+            spawn_save_path = save_policy_artifact(
+                spawn_learning["spawn_policy"],
+                policy_kind="spawn",
+                source_reports=training_paths,
+                output_path=spawn_policy_path,
                 learning_meta={
                     "cycle": cycle,
                     "iterations": cycles,
@@ -2595,9 +3353,11 @@ async def run_online_depth_arbitration_learning_loop(
                     "optimizer": learning.get("optimizer", optimizer_name),
                     "depth_policy_path": str(depth_save_path),
                     "specialist_policy_path": str(specialist_save_path),
+                    "spawn_policy_path": str(spawn_save_path),
                     "memory_policy_path": str(memory_save_path),
                     "depth_policy_env": learning["depth_policy"]["policy_env"],
                     "specialist_policy_env": learning["specialist_policy"]["policy_env"],
+                    "spawn_policy_env": spawn_learning["spawn_policy"]["policy_env"],
                     "memory_policy_env": memory_learning["memory_policy"]["policy_env"],
                 }
             )
@@ -2610,6 +3370,10 @@ async def run_online_depth_arbitration_learning_loop(
             os.environ.pop("RIM_SPECIALIST_POLICY_PATH", None)
         else:
             os.environ["RIM_SPECIALIST_POLICY_PATH"] = previous_specialist_path
+        if previous_spawn_path is None:
+            os.environ.pop("RIM_SPAWN_POLICY_PATH", None)
+        else:
+            os.environ["RIM_SPAWN_POLICY_PATH"] = previous_spawn_path
         if previous_memory_path is None:
             os.environ.pop("RIM_MEMORY_POLICY_PATH", None)
         else:
@@ -2629,10 +3393,12 @@ async def run_online_depth_arbitration_learning_loop(
         "target_runtime_sec": target_runtime_sec,
         "depth_policy_path": str(depth_policy_path),
         "specialist_policy_path": str(specialist_policy_path),
+        "spawn_policy_path": str(spawn_policy_path),
         "memory_policy_path": str(memory_policy_path),
         "recommended_exports": [
             f"export RIM_DEPTH_POLICY_PATH={depth_policy_path}",
             f"export RIM_SPECIALIST_POLICY_PATH={specialist_policy_path}",
+            f"export RIM_SPAWN_POLICY_PATH={spawn_policy_path}",
             f"export RIM_MEMORY_POLICY_PATH={memory_policy_path}",
         ],
         "cycles": cycle_outputs,

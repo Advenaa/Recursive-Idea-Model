@@ -127,8 +127,9 @@ rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality
 rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
+rim eval train-rl-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3
-# autolearn updates depth/specialist/memory policy files under rim/eval/policies by default
+# autolearn updates depth/specialist/spawn/memory policy files under rim/eval/policies by default
 ```
 
 Provider env vars:
@@ -189,6 +190,10 @@ export RIM_SPAWN_MAX_SPECIALISTS_DEEP=3
 export RIM_SPAWN_MAX_SPECIALISTS_FAST=1
 export RIM_ENABLE_DYNAMIC_SPECIALISTS=1
 export RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS=2
+export RIM_SPAWN_ROLE_BOOSTS='{"security":0.4}'
+export RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS='{"bioinformatics":0.7}'
+export RIM_SPAWN_ROLE_ROUTING_OVERRIDES='{"security":"prioritize_high_severity_and_compliance_constraints"}'
+export RIM_SPAWN_ROLE_TOOL_OVERRIDES='{"security":["threat_model","policy_checklist"]}'
 # Optional trained spawn policy file from `rim eval train-spawn-policy` output
 export RIM_SPAWN_POLICY_PATH=rim/eval/policies/spawn_policy.json
 export RIM_ENABLE_EXECUTABLE_VERIFICATION=1
