@@ -7,6 +7,7 @@ from rim.eval import runner
 from rim.eval.runner import (
     build_blind_review_packet,
     calibrate_depth_allocator,
+    calibration_env_exports,
     compare_reports,
     evaluate_regression_gate,
     run_benchmark,
@@ -348,3 +349,17 @@ def test_calibrate_depth_allocator_recommends_less_depth_for_runtime_pressure() 
     env = calibration["recommended_env"]
     assert env["RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE"] < 0.78
     assert env["RIM_MAX_ANALYSIS_CYCLES"] == 1
+
+
+def test_calibration_env_exports_formats_env_lines() -> None:
+    calibration = {
+        "recommended_env": {
+            "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": 0.812,
+            "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": 1,
+            "RIM_MAX_ANALYSIS_CYCLES": 2,
+        }
+    }
+    exports = calibration_env_exports(calibration)
+    assert "export RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE=0.812" in exports
+    assert "export RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS=1" in exports
+    assert "export RIM_MAX_ANALYSIS_CYCLES=2" in exports

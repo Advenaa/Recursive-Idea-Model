@@ -640,3 +640,17 @@ def calibrate_depth_allocator(
         "recommended_env": env,
         "rationale": rationale,
     }
+
+
+def calibration_env_exports(calibration: dict[str, Any]) -> list[str]:
+    env = calibration.get("recommended_env")
+    if not isinstance(env, dict):
+        return []
+    lines: list[str] = []
+    for key in sorted(env.keys()):
+        value = env[key]
+        if isinstance(value, float):
+            lines.append(f"export {key}={value:.3f}".rstrip("0").rstrip("."))
+        else:
+            lines.append(f"export {key}={value}")
+    return lines

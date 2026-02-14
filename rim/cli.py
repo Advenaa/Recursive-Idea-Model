@@ -13,6 +13,7 @@ from rim.eval.runner import (
     DEFAULT_REPORTS_DIR,
     build_blind_review_packet,
     calibrate_depth_allocator,
+    calibration_env_exports,
     compare_reports,
     evaluate_regression_gate,
     list_reports,
@@ -344,6 +345,33 @@ def _cmd_eval_calibrate(args: argparse.Namespace) -> int:
     payload = {
         "source_report": str(report_path),
         "calibration": calibration,
+        "recommended_exports": calibration_env_exports(calibration),
+    }
+    if args.save:
+        Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+async def _cmd_eval_calibrate_loop(args: argparse.Namespace) -> int:
+    orchestrator = _build_orchestrator()
+    dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
+    report = await run_benchmark(
+        orchestrator=orchestrator,
+        dataset_path=dataset,
+        mode=args.mode,
+        limit=args.limit,
+    )
+    report_path = save_report(report, Path(args.save_report) if args.save_report else None)
+    calibration = calibrate_depth_allocator(
+        report,
+        target_quality=args.target_quality,
+        target_runtime_sec=args.target_runtime_sec,
+    )
+    payload = {
+        "report_path": str(report_path),
+        "calibration": calibration,
+        "recommended_exports": calibration_env_exports(calibration),
     }
     if args.save:
         Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -446,6 +474,17 @@ def build_parser() -> argparse.ArgumentParser:
     eval_calibrate.add_argument("--target-quality", type=float, default=0.65)
     eval_calibrate.add_argument("--target-runtime-sec", type=float)
     eval_calibrate.add_argument("--save")
+    eval_calibrate_loop = eval_sub.add_parser(
+        "calibrate-loop",
+        help="Run benchmark then output depth-allocator calibration recommendations",
+    )
+    eval_calibrate_loop.add_argument("--dataset")
+    eval_calibrate_loop.add_argument("--mode", choices=["deep", "fast"], default="deep")
+    eval_calibrate_loop.add_argument("--limit", type=int)
+    eval_calibrate_loop.add_argument("--target-quality", type=float, default=0.65)
+    eval_calibrate_loop.add_argument("--target-runtime-sec", type=float)
+    eval_calibrate_loop.add_argument("--save")
+    eval_calibrate_loop.add_argument("--save-report")
 
     sub.add_parser("health", help="Healthcheck DB and providers")
     return parser
@@ -484,6 +523,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_blindpack(args))
     if args.command == "eval" and args.eval_command == "calibrate":
         raise SystemExit(_cmd_eval_calibrate(args))
+    if args.command == "eval" and args.eval_command == "calibrate-loop":
+        raise SystemExit(asyncio.run(_cmd_eval_calibrate_loop(args)))
     if args.command == "health":
         raise SystemExit(asyncio.run(_cmd_health()))
     raise SystemExit(1)

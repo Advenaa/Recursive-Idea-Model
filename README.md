@@ -120,6 +120,7 @@ rim eval compare
 rim eval gate --min-quality-delta 0.0 --max-runtime-delta-sec 15
 rim eval blindpack --limit 20
 rim eval calibrate --target-quality 0.65 --target-runtime-sec 60
+rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-runtime-sec 60
 ```
 
 Provider env vars:
