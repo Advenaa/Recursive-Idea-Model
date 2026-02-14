@@ -15,6 +15,7 @@ from rim.core.schemas import (
     RunLogsResponse,
     StageLogEntry,
 )
+from rim.providers.base import BudgetExceededError
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
 
@@ -64,15 +65,29 @@ class RimOrchestrator:
         self.repository = repository
         self.router = router
 
-    def create_run(self, request: AnalyzeRequest) -> str:
+    def create_run(self, request: AnalyzeRequest, status: str = "queued") -> str:
         run_id = str(uuid4())
-        self.repository.create_run(run_id, request.mode, request.idea)
+        self.repository.create_run_with_request(
+            run_id=run_id,
+            mode=request.mode,
+            input_idea=request.idea,
+            request_json=request.model_dump_json(),
+            status=status,
+        )
         return run_id
 
     async def execute_run(self, run_id: str, request: AnalyzeRequest) -> AnalyzeResult:
         settings = get_mode_settings(request.mode)
+        provider_session = self.router.create_session(run_id)
 
         try:
+            self.repository.mark_run_status(run_id=run_id, status="running")
+            self.repository.log_stage(
+                run_id=run_id,
+                stage="queue",
+                status="completed",
+                meta={"mode": request.mode},
+            )
             memory_context = self.repository.get_memory_context(limit=8)
             self.repository.log_stage(
                 run_id=run_id,
@@ -82,7 +97,7 @@ class RimOrchestrator:
             )
             decompose_started = time.perf_counter()
             nodes, decompose_provider, decompose_meta = await decompose_idea(
-                self.router,
+                provider_session,
                 request.idea,
                 settings,
                 domain=request.domain,
@@ -100,7 +115,7 @@ class RimOrchestrator:
             self.repository.save_nodes(run_id, nodes)
 
             challenge_started = time.perf_counter()
-            findings = await run_critics(self.router, nodes, settings)
+            findings = await run_critics(provider_session, nodes, settings)
             self.repository.log_stage(
                 run_id=run_id,
                 stage="challenge_parallel",
@@ -112,7 +127,7 @@ class RimOrchestrator:
 
             synth_started = time.perf_counter()
             synthesis, synthesis_providers = await synthesize_idea(
-                self.router,
+                provider_session,
                 request.idea,
                 nodes,
                 findings,
@@ -147,6 +162,12 @@ class RimOrchestrator:
                 latency_ms=int((time.perf_counter() - memory_write_started) * 1000),
                 meta={"entries": len(memory_entries)},
             )
+            self.repository.log_stage(
+                run_id=run_id,
+                stage="provider_budget",
+                status="completed",
+                meta=provider_session.get_usage_meta(),
+            )
 
             result = AnalyzeResult(
                 run_id=run_id,
@@ -166,6 +187,19 @@ class RimOrchestrator:
                 confidence_score=result.confidence_score,
             )
             return result
+        except BudgetExceededError as exc:
+            self.repository.log_stage(
+                run_id=run_id,
+                stage="provider_budget",
+                status="failed",
+                meta={"error": str(exc), **provider_session.get_usage_meta()},
+            )
+            self.repository.mark_run_status(
+                run_id=run_id,
+                status="failed",
+                error_summary=str(exc),
+            )
+            raise
         except Exception as exc:  # noqa: BLE001
             self.repository.mark_run_status(
                 run_id=run_id,
@@ -181,7 +215,7 @@ class RimOrchestrator:
             raise
 
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResult:
-        run_id = self.create_run(request)
+        run_id = self.create_run(request, status="running")
         return await self.execute_run(run_id, request)
 
     def get_run(self, run_id: str) -> AnalyzeRunResponse | None:

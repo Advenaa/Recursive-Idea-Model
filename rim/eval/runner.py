@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from rim.core.schemas import AnalyzeRequest, AnalyzeResult
 from rim.eval.benchmark import evaluate_run
 
 DEFAULT_DATASET_PATH = Path("rim/eval/data/benchmark_ideas.jsonl")
+DEFAULT_REPORTS_DIR = Path("rim/eval/reports")
 
 
 def load_dataset(path: Path) -> list[dict[str, Any]]:
@@ -42,6 +44,7 @@ async def run_benchmark(
     mode: str = "deep",
     limit: int | None = None,
 ) -> dict[str, Any]:
+    started_at = datetime.now(timezone.utc).isoformat()
     dataset = load_dataset(dataset_path)
     if limit is not None and limit > 0:
         dataset = dataset[:limit]
@@ -76,8 +79,10 @@ async def run_benchmark(
     total_runtime_sec = round(time.perf_counter() - started, 3)
     if not runs:
         return {
+            "created_at": started_at,
             "dataset_size": 0,
             "mode": mode,
+            "dataset_path": str(dataset_path),
             "total_runtime_sec": total_runtime_sec,
             "average_runtime_sec": 0.0,
             "average_quality_score": 0.0,
@@ -87,10 +92,86 @@ async def run_benchmark(
     avg_runtime = sum(item["runtime_sec"] for item in runs) / len(runs)
     avg_quality = sum(item["quality"]["quality_score"] for item in runs) / len(runs)
     return {
+        "created_at": started_at,
         "dataset_size": len(runs),
         "mode": mode,
+        "dataset_path": str(dataset_path),
         "total_runtime_sec": total_runtime_sec,
         "average_runtime_sec": round(avg_runtime, 3),
         "average_quality_score": round(avg_quality, 3),
         "runs": runs,
+    }
+
+
+def save_report(report: dict[str, Any], output_path: Path | None = None) -> Path:
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        return output_path
+
+    DEFAULT_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    auto_path = DEFAULT_REPORTS_DIR / f"benchmark_{stamp}.json"
+    auto_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return auto_path
+
+
+def list_reports(reports_dir: Path = DEFAULT_REPORTS_DIR) -> list[Path]:
+    if not reports_dir.exists():
+        return []
+    return sorted(reports_dir.glob("*.json"))
+
+
+def load_report(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid report file: {path}")
+    return payload
+
+
+def compare_reports(base: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+    base_runtime = float(base.get("average_runtime_sec", 0.0))
+    target_runtime = float(target.get("average_runtime_sec", 0.0))
+    base_quality = float(base.get("average_quality_score", 0.0))
+    target_quality = float(target.get("average_quality_score", 0.0))
+
+    base_runs = {
+        str(item.get("id")): item
+        for item in base.get("runs", [])
+        if isinstance(item, dict) and item.get("id") is not None
+    }
+    target_runs = {
+        str(item.get("id")): item
+        for item in target.get("runs", [])
+        if isinstance(item, dict) and item.get("id") is not None
+    }
+
+    shared_ids = sorted(set(base_runs.keys()) & set(target_runs.keys()))
+    run_deltas: list[dict[str, Any]] = []
+    for run_id in shared_ids:
+        base_run = base_runs[run_id]
+        target_run = target_runs[run_id]
+        base_q = float(base_run.get("quality", {}).get("quality_score", 0.0))
+        target_q = float(target_run.get("quality", {}).get("quality_score", 0.0))
+        base_r = float(base_run.get("runtime_sec", 0.0))
+        target_r = float(target_run.get("runtime_sec", 0.0))
+        run_deltas.append(
+            {
+                "id": run_id,
+                "quality_delta": round(target_q - base_q, 4),
+                "runtime_delta_sec": round(target_r - base_r, 4),
+            }
+        )
+
+    return {
+        "base_created_at": base.get("created_at"),
+        "target_created_at": target.get("created_at"),
+        "base_mode": base.get("mode"),
+        "target_mode": target.get("mode"),
+        "base_dataset_size": int(base.get("dataset_size", 0)),
+        "target_dataset_size": int(target.get("dataset_size", 0)),
+        "average_quality_delta": round(target_quality - base_quality, 4),
+        "average_runtime_delta_sec": round(target_runtime - base_runtime, 4),
+        "shared_run_count": len(shared_ids),
+        "run_deltas": run_deltas,
     }

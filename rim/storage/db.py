@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     mode TEXT NOT NULL,
     input_idea TEXT NOT NULL,
+    request_json TEXT,
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     completed_at TEXT,
@@ -86,4 +87,11 @@ def get_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    # Lightweight migration path for existing DBs.
+    run_cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+    }
+    if "request_json" not in run_cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN request_json TEXT")
     conn.commit()

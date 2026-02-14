@@ -53,3 +53,35 @@ def test_stage_logs_roundtrip(tmp_path: Path) -> None:
     assert logs[0]["provider"] == "codex"
     assert logs[0]["latency_ms"] == 123
     assert logs[0]["meta"]["node_count"] == 4
+
+
+def test_pending_runs_and_request_roundtrip(tmp_path: Path) -> None:
+    db_path = tmp_path / "rim_test.db"
+    repo = RunRepository(db_path=db_path)
+    repo.create_run_with_request(
+        run_id="run-queued",
+        mode="deep",
+        input_idea="idea 1",
+        request_json='{"idea":"idea 1","mode":"deep"}',
+        status="queued",
+    )
+    repo.create_run_with_request(
+        run_id="run-running",
+        mode="fast",
+        input_idea="idea 2",
+        request_json='{"idea":"idea 2","mode":"fast"}',
+        status="running",
+    )
+    repo.create_run_with_request(
+        run_id="run-done",
+        mode="fast",
+        input_idea="idea 3",
+        request_json='{"idea":"idea 3","mode":"fast"}',
+        status="completed",
+    )
+
+    pending = repo.get_pending_runs()
+    assert pending == ["run-queued", "run-running"]
+    req = repo.get_run_request("run-queued")
+    assert req is not None
+    assert req["idea"] == "idea 1"

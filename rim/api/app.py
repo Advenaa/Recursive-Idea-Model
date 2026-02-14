@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-
 from fastapi import FastAPI, HTTPException, Query, Response
 
+from rim.api.job_queue import RunJobQueue
 from rim.core.orchestrator import RimOrchestrator
 from rim.core.schemas import (
-    AnalyzeRequest,
-    AnalyzeResult,
-    AnalyzeRunResponse,
-    HealthResponse,
-    RunLogsResponse,
+    AnalyzeRequest, AnalyzeRunResponse, HealthResponse, RunLogsResponse
 )
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
@@ -21,16 +15,17 @@ app = FastAPI(title="RIM MVP", version="0.1.0")
 repository = RunRepository()
 router = ProviderRouter()
 orchestrator = RimOrchestrator(repository=repository, router=router)
-in_flight_runs: dict[str, asyncio.Task[AnalyzeResult]] = {}
+job_queue = RunJobQueue(orchestrator=orchestrator, repository=repository)
 
 
-def _register_task(run_id: str, task: asyncio.Task[AnalyzeResult]) -> None:
-    in_flight_runs[run_id] = task
+@app.on_event("startup")
+async def startup_event() -> None:
+    await job_queue.start()
 
-    def _cleanup(_task: asyncio.Task[Any]) -> None:
-        in_flight_runs.pop(run_id, None)
 
-    task.add_done_callback(_cleanup)
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    await job_queue.stop()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -47,23 +42,17 @@ async def analyze(
     response: Response,
     wait: bool = Query(default=False),
 ) -> AnalyzeRunResponse:
-    run_id = orchestrator.create_run(request)
-    task = asyncio.create_task(orchestrator.execute_run(run_id, request))
-    _register_task(run_id, task)
+    run_id = await job_queue.submit(request)
 
     if wait:
-        try:
-            await task
-        except Exception:  # noqa: BLE001
-            pass
-        run = orchestrator.get_run(run_id)
+        run = await job_queue.wait_for(run_id)
         if run is None:
             raise HTTPException(status_code=500, detail="Run state missing after execution")
         response.status_code = 200
         return run
 
     response.status_code = 202
-    return AnalyzeRunResponse(run_id=run_id, status="running", result=None, error_summary=None)
+    return AnalyzeRunResponse(run_id=run_id, status="queued", result=None, error_summary=None)
 
 
 @app.get("/runs/{run_id}", response_model=AnalyzeRunResponse)

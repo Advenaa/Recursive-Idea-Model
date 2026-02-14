@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any
 
 
@@ -21,6 +21,13 @@ class ProviderResult:
     estimated_tokens_out: int
     provider: str
     exit_code: int
+
+    def to_meta(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class BudgetExceededError(RuntimeError):
+    """Raised when per-run provider budgets are exceeded."""
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -64,9 +71,22 @@ class ProviderAdapter(ABC):
         config: ProviderConfig,
         json_schema: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        payload, _result = await self.invoke_json_with_result(
+            prompt=prompt,
+            config=config,
+            json_schema=json_schema,
+        )
+        return payload
+
+    async def invoke_json_with_result(
+        self,
+        prompt: str,
+        config: ProviderConfig,
+        json_schema: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], ProviderResult]:
         result = await self.invoke(prompt, config)
         blob = extract_json_blob(result.text)
-        return json.loads(blob)
+        return json.loads(blob), result
 
     @abstractmethod
     async def healthcheck(self) -> bool:

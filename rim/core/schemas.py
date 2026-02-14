@@ -49,7 +49,7 @@ class AnalyzeResult(BaseModel):
 
 class AnalyzeRunResponse(BaseModel):
     run_id: str
-    status: Literal["running", "completed", "failed", "partial"]
+    status: Literal["queued", "running", "completed", "failed", "partial"]
     result: AnalyzeResult | None = None
     error_summary: str | None = None
 

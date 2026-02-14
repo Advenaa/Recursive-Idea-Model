@@ -7,7 +7,15 @@ from pathlib import Path
 
 from rim.core.orchestrator import RimOrchestrator
 from rim.core.schemas import AnalyzeRequest
-from rim.eval.runner import DEFAULT_DATASET_PATH, run_benchmark
+from rim.eval.runner import (
+    DEFAULT_DATASET_PATH,
+    DEFAULT_REPORTS_DIR,
+    compare_reports,
+    list_reports,
+    load_report,
+    run_benchmark,
+    save_report,
+)
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
 
@@ -84,9 +92,35 @@ async def _cmd_eval_run(args: argparse.Namespace) -> int:
         mode=args.mode,
         limit=args.limit,
     )
-    if args.save:
-        Path(args.save).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    save_path = save_report(report, Path(args.save) if args.save else None)
+    report["report_path"] = str(save_path)
     print(json.dumps(report, indent=2))
+    return 0
+
+
+def _cmd_eval_list(_args: argparse.Namespace) -> int:
+    reports = [str(path) for path in list_reports(DEFAULT_REPORTS_DIR)]
+    print(json.dumps({"reports": reports}, indent=2))
+    return 0
+
+
+def _resolve_compare_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    if args.base and args.target:
+        return Path(args.base), Path(args.target)
+    reports = list_reports(DEFAULT_REPORTS_DIR)
+    if len(reports) < 2:
+        raise ValueError("Need at least two saved reports for automatic comparison.")
+    return reports[-2], reports[-1]
+
+
+def _cmd_eval_compare(args: argparse.Namespace) -> int:
+    base_path, target_path = _resolve_compare_paths(args)
+    base = load_report(base_path)
+    target = load_report(target_path)
+    comparison = compare_reports(base, target)
+    comparison["base_report"] = str(base_path)
+    comparison["target_report"] = str(target_path)
+    print(json.dumps(comparison, indent=2))
     return 0
 
 
@@ -117,6 +151,13 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument("--mode", choices=["deep", "fast"], default="deep")
     eval_run.add_argument("--limit", type=int)
     eval_run.add_argument("--save")
+    eval_sub.add_parser("list", help="List saved benchmark reports")
+    eval_compare = eval_sub.add_parser(
+        "compare",
+        help="Compare two benchmark reports (defaults to latest two)",
+    )
+    eval_compare.add_argument("--base")
+    eval_compare.add_argument("--target")
 
     sub.add_parser("health", help="Healthcheck DB and providers")
     return parser
@@ -133,6 +174,10 @@ def main() -> None:
         raise SystemExit(_cmd_run_logs(args))
     if args.command == "eval" and args.eval_command == "run":
         raise SystemExit(asyncio.run(_cmd_eval_run(args)))
+    if args.command == "eval" and args.eval_command == "list":
+        raise SystemExit(_cmd_eval_list(args))
+    if args.command == "eval" and args.eval_command == "compare":
+        raise SystemExit(_cmd_eval_compare(args))
     if args.command == "health":
         raise SystemExit(asyncio.run(_cmd_health()))
     raise SystemExit(1)

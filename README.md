@@ -32,6 +32,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 
 - FastAPI service (`rim/api/app.py`)
 - Orchestrator pipeline with recursive stop conditions (`rim/core/orchestrator.py`)
+- Persistent API job queue (resume queued/running jobs on restart) (`rim/api/job_queue.py`)
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
 - SQLite persistence + memory context reuse (`rim/storage/`)
 - Benchmark runner + dataset (`rim/eval/`)
@@ -82,6 +83,8 @@ rim health
 rim analyze --idea "Your idea here" --mode deep --json
 rim run logs <run_id>
 rim eval run --mode deep --limit 3
+rim eval list
+rim eval compare
 ```
 
 Provider env vars:
@@ -91,6 +94,10 @@ export RIM_CODEX_CMD=codex
 export RIM_CODEX_ARGS="exec --skip-git-repo-check --sandbox read-only"
 export RIM_CLAUDE_CMD=claude
 export RIM_CLAUDE_ARGS="-p --output-format json"
+export RIM_RUN_MAX_PROVIDER_CALLS=120
+export RIM_RUN_MAX_PROVIDER_LATENCY_MS=900000
+export RIM_RUN_MAX_ESTIMATED_TOKENS=500000
+export RIM_RUN_MAX_ESTIMATED_COST_USD=10.0
 ```
 
 ## Papers

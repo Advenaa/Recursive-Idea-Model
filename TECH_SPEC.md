@@ -112,6 +112,11 @@ Environment variables:
 4. `RIM_CLAUDE_ARGS` default `-p --output-format json`
 5. `RIM_PROVIDER_TIMEOUT_SEC` default `180`
 6. `RIM_MAX_PARALLEL_CRITICS` default `6`
+7. `RIM_RUN_MAX_PROVIDER_CALLS` default `120`
+8. `RIM_RUN_MAX_PROVIDER_LATENCY_MS` default `900000`
+9. `RIM_RUN_MAX_ESTIMATED_TOKENS` default `500000`
+10. `RIM_RUN_MAX_ESTIMATED_COST_USD` default `10.0`
+11. `RIM_QUEUE_WORKERS` default `1`
 
 ## 5) Modes and Runtime Controls
 
@@ -222,9 +227,10 @@ Request JSON:
 Behavior:
 
 1. Creates a run.
-2. Starts pipeline execution in background by default.
-3. Returns `{ run_id, status }` with HTTP 202 when `wait=false`.
-4. When `wait=true`, blocks until completion and returns full run payload.
+2. Persists request payload in DB and enqueues run in persistent worker queue.
+3. Starts pipeline execution in background by default.
+4. Returns `{ run_id, status }` with HTTP 202 when `wait=false`.
+5. When `wait=true`, blocks until completion and returns full run payload.
 
 ### 7.2 `GET /runs/{run_id}`
 
@@ -274,6 +280,11 @@ Flags:
 ### 8.4 Benchmark
 
 `rim eval run --mode deep --limit 10 --save report.json`
+
+Additional eval commands:
+
+1. `rim eval list` for saved report history.
+2. `rim eval compare --base <report_a> --target <report_b>` for time-over-time deltas (defaults to latest two reports when omitted).
 
 ## 9) Orchestration Logic
 

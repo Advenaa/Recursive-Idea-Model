@@ -86,19 +86,19 @@ class ClaudeCLIAdapter(ProviderAdapter):
             exit_code=exit_code,
         )
 
-    async def invoke_json(
+    async def invoke_json_with_result(
         self,
         prompt: str,
         config: ProviderConfig,
         json_schema: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], ProviderResult]:
         timeout = config.timeout_sec or self.default_timeout_sec
         cmd = self._build_base_cmd()
         if json_schema is not None:
             cmd.extend(["--json-schema", json.dumps(json_schema)])
         cmd.append(prompt)
 
-        stdout, stderr, _exit_code, _latency = await self._run_cmd(cmd, timeout)
+        stdout, stderr, exit_code, latency_ms = await self._run_cmd(cmd, timeout)
         stripped = stdout.strip()
         if not stripped:
             raise ValueError(f"{self.name} returned empty output: {stderr.strip()}")
@@ -109,13 +109,45 @@ class ClaudeCLIAdapter(ProviderAdapter):
 
         structured = payload.get("structured_output")
         if isinstance(structured, dict):
-            return structured
+            result = ProviderResult(
+                text=json.dumps(structured)[: config.max_output_chars],
+                raw_output=(stdout + "\n" + stderr).strip(),
+                latency_ms=latency_ms,
+                estimated_tokens_in=max(1, len(prompt) // 4),
+                estimated_tokens_out=max(1, len(json.dumps(structured)) // 4),
+                provider=self.name,
+                exit_code=exit_code,
+            )
+            return structured, result
 
         result_text = payload.get("result")
         if isinstance(result_text, str) and result_text.strip():
             blob = extract_json_blob(result_text)
-            return json.loads(blob)
+            parsed = json.loads(blob)
+            result = ProviderResult(
+                text=result_text[: config.max_output_chars],
+                raw_output=(stdout + "\n" + stderr).strip(),
+                latency_ms=latency_ms,
+                estimated_tokens_in=max(1, len(prompt) // 4),
+                estimated_tokens_out=max(1, len(result_text) // 4),
+                provider=self.name,
+                exit_code=exit_code,
+            )
+            return parsed, result
         raise ValueError(f"{self.name} output missing JSON result payload")
+
+    async def invoke_json(
+        self,
+        prompt: str,
+        config: ProviderConfig,
+        json_schema: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload, _result = await self.invoke_json_with_result(
+            prompt=prompt,
+            config=config,
+            json_schema=json_schema,
+        )
+        return payload
 
     async def healthcheck(self) -> bool:
         binary = shlex.split(self.command)[0]

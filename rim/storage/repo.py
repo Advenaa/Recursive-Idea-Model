@@ -27,12 +27,28 @@ class RunRepository:
             return False
 
     def create_run(self, run_id: str, mode: str, input_idea: str) -> None:
+        self.create_run_with_request(
+            run_id=run_id,
+            mode=mode,
+            input_idea=input_idea,
+            request_json=None,
+            status="running",
+        )
+
+    def create_run_with_request(
+        self,
+        run_id: str,
+        mode: str,
+        input_idea: str,
+        request_json: str | None,
+        status: str = "queued",
+    ) -> None:
         self.conn.execute(
             """
-            INSERT INTO runs (id, mode, input_idea, status, created_at)
-            VALUES (?, ?, ?, 'running', ?)
+            INSERT INTO runs (id, mode, input_idea, request_json, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (run_id, mode, input_idea, _utc_now()),
+            (run_id, mode, input_idea, request_json, status, _utc_now()),
         )
         self.conn.commit()
 
@@ -43,13 +59,14 @@ class RunRepository:
         confidence_score: float | None = None,
         error_summary: str | None = None,
     ) -> None:
+        completed_at = _utc_now() if status in {"completed", "failed", "partial"} else None
         self.conn.execute(
             """
             UPDATE runs
             SET status = ?, completed_at = ?, confidence_score = ?, error_summary = ?
             WHERE id = ?
             """,
-            (status, _utc_now(), confidence_score, error_summary, run_id),
+            (status, completed_at, confidence_score, error_summary, run_id),
         )
         self.conn.commit()
 
@@ -228,6 +245,35 @@ class RunRepository:
             "error_summary": run_row["error_summary"],
             "result": result_payload,
         }
+
+    def get_run_request(self, run_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT request_json FROM runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        payload = row["request_json"]
+        if not payload:
+            return None
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+        return decoded if isinstance(decoded, dict) else None
+
+    def get_pending_runs(self, limit: int = 200) -> list[str]:
+        rows = self.conn.execute(
+            """
+            SELECT id
+            FROM runs
+            WHERE status IN ('queued', 'running')
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [str(row["id"]) for row in rows]
 
     def get_stage_logs(self, run_id: str) -> list[dict]:
         rows = self.conn.execute(

@@ -88,12 +88,12 @@ class CodexCLIAdapter(ProviderAdapter):
         finally:
             out_path.unlink(missing_ok=True)
 
-    async def invoke_json(
+    async def invoke_json_with_result(
         self,
         prompt: str,
         config: ProviderConfig,
         json_schema: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], ProviderResult]:
         timeout = config.timeout_sec or self.default_timeout_sec
         with tempfile.NamedTemporaryFile(delete=False) as out_file:
             out_path = Path(out_file.name)
@@ -109,16 +109,39 @@ class CodexCLIAdapter(ProviderAdapter):
         cmd.extend(["-o", str(out_path), "-"])
 
         try:
-            stdout, stderr, _exit_code, _latency = await self._run_cmd(cmd, prompt, timeout)
+            stdout, stderr, exit_code, latency_ms = await self._run_cmd(cmd, prompt, timeout)
             text = out_path.read_text(encoding="utf-8", errors="replace").strip()
             if not text:
                 text = stdout.strip() or stderr.strip()
             blob = extract_json_blob(text)
-            return json.loads(blob)
+            payload = json.loads(blob)
+            result = ProviderResult(
+                text=text[: config.max_output_chars],
+                raw_output=(stdout + "\n" + stderr).strip(),
+                latency_ms=latency_ms,
+                estimated_tokens_in=max(1, len(prompt) // 4),
+                estimated_tokens_out=max(1, len(text) // 4),
+                provider=self.name,
+                exit_code=exit_code,
+            )
+            return payload, result
         finally:
             out_path.unlink(missing_ok=True)
             if schema_path is not None:
                 schema_path.unlink(missing_ok=True)
+
+    async def invoke_json(
+        self,
+        prompt: str,
+        config: ProviderConfig,
+        json_schema: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload, _result = await self.invoke_json_with_result(
+            prompt=prompt,
+            config=config,
+            json_schema=json_schema,
+        )
+        return payload
 
     async def healthcheck(self) -> bool:
         binary = shlex.split(self.command)[0]
