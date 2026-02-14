@@ -254,3 +254,52 @@ Each run must return JSON with this minimum schema:
 - Finalize a canonical 20-idea benchmark pack and blind-review process
 - Add explicit run cancel/retry controls in API and CLI
 - Add richer evaluation analytics (domain-level trend and regression dashboards)
+
+## 20) SOTA Alignment Status (vs `rim_paper_4.docx`)
+
+Status date: February 14, 2026
+
+The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet complete.
+
+### 20.1 Implemented
+
+- Recursive decomposition tree with stop conditions (depth, confidence, marginal gain, runtime, branch budget).
+- Parallel typed challenge layer (logic, evidence, execution, adversarial critics).
+- Structured synthesis with deep-mode multi-pass refinement.
+- Deep mode default across API and CLI.
+- Persistent run artifacts, memory retrieval filters, and feedback-driven memory rescoring.
+- Provider orchestration guardrails (fallbacks, retries, determinism controls, and run budgets).
+- Benchmark/eval workflow with baseline, compare, and gate.
+
+### 20.2 Partially Implemented
+
+- Learning layer:
+  persistent memory and feedback exist, but no adaptive strategy learning/meta-model for decomposition/challenge/synthesis policy updates.
+- Orchestration depth/breadth policy:
+  parallel challenge exists, but no explicit DepthAllocator that decides recursive continuation after each synthesis cycle.
+- Challenge reconciliation:
+  critic outputs are aggregated, but there is no explicit disagreement arbitration or consensus stress-test module.
+
+### 20.3 Missing / Slacking Against SOTA Paper
+
+- Dynamic agent spawning and specialization (AgentSpawner-style role/tool creation at runtime).
+- Neuro-symbolic verification loops (formal claim testing, executable checks, theorem/constraint tooling).
+- Tripartite memory architecture (episodic, working, tool) with autonomous memory folding.
+- RL-based orchestration training (PARL/ARPO/AEPO-style policy optimization and credit assignment).
+- Full recursive cycle controller that repeatedly re-enters decompose->challenge->synthesize until stability criteria are met.
+
+### 20.4 Gap-Closure Priorities
+
+1. P0: add recursive cycle controller + DepthAllocator policy (stability/quality/budget-driven loop control).
+2. P0: add critique reconciliation module (consensus detection, disagreement arbitration, diversity guardrails).
+3. P1: add specialization layer with dynamic role/tool selection contracts.
+4. P1: add verification adapters for code execution and structured factual/constraint checks.
+5. P2: upgrade memory to episodic/working/tool stores and implement folding triggers.
+6. P3: add offline orchestration training pipeline for policy learning and credit assignment.
+
+### 20.5 Delivery Stages for Paper Parity
+
+1. v0.2: recursive cycle controller + reconciliation + stronger evaluation pack.
+2. v0.3: specialization layer + external verification tools.
+3. v0.4: tripartite memory + folding.
+4. v0.5: RL orchestration training and policy rollout.
