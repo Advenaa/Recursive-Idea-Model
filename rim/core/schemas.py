@@ -5,6 +5,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+RunStatus = Literal["queued", "running", "completed", "failed", "partial", "canceled"]
+
 
 class AnalyzeRequest(BaseModel):
     idea: str = Field(min_length=1)
@@ -56,7 +58,7 @@ class RunError(BaseModel):
 
 class AnalyzeRunResponse(BaseModel):
     run_id: str
-    status: Literal["queued", "running", "completed", "failed", "partial"]
+    status: RunStatus
     result: AnalyzeResult | None = None
     error_summary: str | None = None
     error: RunError | None = None
@@ -66,7 +68,7 @@ class RunSummary(BaseModel):
     run_id: str
     mode: Literal["deep", "fast"]
     input_idea: str
-    status: Literal["queued", "running", "completed", "failed", "partial"]
+    status: RunStatus
     created_at: str
     completed_at: str | None = None
     confidence_score: float | None = None

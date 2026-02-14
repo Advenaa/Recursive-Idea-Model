@@ -227,6 +227,30 @@ def test_get_run_parses_structured_error_summary(tmp_path: Path) -> None:
     assert run["error"]["provider"] == "claude"
 
 
+def test_mark_run_status_canceled_sets_completed_timestamp(tmp_path: Path) -> None:
+    db_path = tmp_path / "rim_test.db"
+    repo = RunRepository(db_path=db_path)
+    repo.create_run_with_request(
+        run_id="run-canceled",
+        mode="deep",
+        input_idea="idea canceled",
+        request_json='{"idea":"idea canceled","mode":"deep"}',
+        status="running",
+    )
+    repo.mark_run_status(
+        run_id="run-canceled",
+        status="canceled",
+        error_summary='{"stage":"queue","provider":null,"message":"Run canceled by user request.","retryable":true}',
+    )
+    row = repo.conn.execute(
+        "SELECT status, completed_at FROM runs WHERE id = ?",
+        ("run-canceled",),
+    ).fetchone()
+    assert row is not None
+    assert row["status"] == "canceled"
+    assert row["completed_at"] is not None
+
+
 def test_feedback_updates_memory_scores_and_creates_feedback_entry(tmp_path: Path) -> None:
     db_path = tmp_path / "rim_test.db"
     repo = RunRepository(db_path=db_path)

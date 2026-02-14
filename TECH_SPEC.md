@@ -281,7 +281,7 @@ Behavior:
 
 Returns recent runs with optional filters:
 
-1. `status` (`queued|running|completed|failed|partial`)
+1. `status` (`queued|running|completed|failed|partial|canceled`)
 2. `mode` (`deep|fast`)
 3. `limit` (default `20`, max `200`)
 4. `offset` (default `0`)
@@ -309,7 +309,24 @@ Returns ordered stage telemetry for the run:
 4. status,
 5. stage metadata (including decomposition stop reason when applicable).
 
-### 7.6 `POST /runs/{run_id}/feedback`
+### 7.6 `POST /runs/{run_id}/cancel`
+
+Behavior:
+
+1. Cancels a queued/running run.
+2. Marks run status as `canceled` with structured queue-stage error metadata.
+3. If run is already terminal, returns current run state without mutation.
+
+### 7.7 `POST /runs/{run_id}/retry`
+
+Behavior:
+
+1. Retry is allowed only for `failed|partial|canceled` runs.
+2. Clears prior run artifacts (nodes/findings/synthesis/memory/feedback/logs) and re-queues the run.
+3. Returns HTTP 202 with `status: queued` when accepted.
+4. Returns HTTP 409 for non-retryable statuses.
+
+### 7.8 `POST /runs/{run_id}/feedback`
 
 Request JSON:
 
@@ -341,11 +358,15 @@ Flags:
 5. `--json` (print raw JSON)
 6. `--save <path>` (write output artifact)
 
-### 8.2 Run Inspection
+### 8.2 Run Inspection and Control
 
 `rim run show <run_id>`
 
 `rim run list --limit 20 --status completed`
+
+`rim run cancel <run_id>`
+
+`rim run retry <run_id>`
 
 ### 8.3 Healthcheck
 

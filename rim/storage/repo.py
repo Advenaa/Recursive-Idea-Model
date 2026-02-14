@@ -15,6 +15,8 @@ SEVERITY_RANK = {
     "high": 3,
     "critical": 4,
 }
+TERMINAL_RUN_STATUSES = {"completed", "failed", "partial", "canceled"}
+RETRYABLE_RUN_STATUSES = {"failed", "partial", "canceled"}
 
 
 def _utc_now() -> str:
@@ -109,7 +111,7 @@ class RunRepository:
         confidence_score: float | None = None,
         error_summary: str | None = None,
     ) -> None:
-        completed_at = _utc_now() if status in {"completed", "failed", "partial"} else None
+        completed_at = _utc_now() if status in TERMINAL_RUN_STATUSES else None
         self.conn.execute(
             """
             UPDATE runs
@@ -351,6 +353,30 @@ class RunRepository:
         except json.JSONDecodeError:
             return None
         return decoded if isinstance(decoded, dict) else None
+
+    def reset_run_for_retry(self, run_id: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        self.conn.execute("DELETE FROM nodes WHERE run_id = ?", (run_id,))
+        self.conn.execute("DELETE FROM critic_findings WHERE run_id = ?", (run_id,))
+        self.conn.execute("DELETE FROM synthesis_outputs WHERE run_id = ?", (run_id,))
+        self.conn.execute("DELETE FROM memory_entries WHERE run_id = ?", (run_id,))
+        self.conn.execute("DELETE FROM run_feedback WHERE run_id = ?", (run_id,))
+        self.conn.execute("DELETE FROM stage_logs WHERE run_id = ?", (run_id,))
+        self.conn.execute(
+            """
+            UPDATE runs
+            SET status = 'queued', completed_at = NULL, confidence_score = NULL, error_summary = NULL
+            WHERE id = ?
+            """,
+            (run_id,),
+        )
+        self.conn.commit()
+        return True
 
     def get_run_domain(self, run_id: str) -> str | None:
         payload = self.get_run_request(run_id)

@@ -60,3 +60,38 @@ def test_list_runs_endpoint_filters_and_paginates(tmp_path: Path) -> None:
         assert [item.run_id for item in paged.runs] == ["run-3", "run-2"]
     finally:
         api_app.orchestrator = previous_orchestrator
+
+
+def test_list_runs_endpoint_supports_canceled_filter(tmp_path: Path) -> None:
+    repo = RunRepository(db_path=tmp_path / "rim_api_canceled.db")
+    repo.create_run_with_request(
+        run_id="run-cancel-1",
+        mode="deep",
+        input_idea="idea one",
+        request_json='{"idea":"idea one","mode":"deep"}',
+        status="canceled",
+    )
+    repo.create_run_with_request(
+        run_id="run-cancel-2",
+        mode="deep",
+        input_idea="idea two",
+        request_json='{"idea":"idea two","mode":"deep"}',
+        status="completed",
+    )
+
+    previous_orchestrator = api_app.orchestrator
+    api_app.orchestrator = RimOrchestrator(repository=repo, router=ProviderRouter())
+    try:
+        filtered = asyncio.run(
+            api_app.list_runs(
+                status="canceled",
+                mode=None,
+                limit=10,
+                offset=0,
+            )
+        )
+        assert filtered.count == 1
+        assert filtered.runs[0].run_id == "run-cancel-1"
+        assert filtered.runs[0].status == "canceled"
+    finally:
+        api_app.orchestrator = previous_orchestrator

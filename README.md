@@ -77,6 +77,8 @@ curl -s -X POST "http://127.0.0.1:8000/analyze?run_id=demo-run-1" \
 curl -s "http://127.0.0.1:8000/runs?limit=10&status=completed"
 curl -s "http://127.0.0.1:8000/runs/<run_id>"
 curl -s "http://127.0.0.1:8000/runs/<run_id>/logs"
+curl -s -X POST "http://127.0.0.1:8000/runs/<run_id>/cancel"
+curl -s -X POST "http://127.0.0.1:8000/runs/<run_id>/retry"
 curl -s -X POST "http://127.0.0.1:8000/runs/<run_id>/feedback" \
   -H "Content-Type: application/json" \
   -d '{"verdict":"accept","notes":"Strong output"}'
@@ -92,7 +94,7 @@ curl -s -X POST "http://127.0.0.1:8000/analyze?wait=true" \
 
 Failure contract:
 
-- Run responses can return `status: "failed"` or `status: "partial"`.
+- Run responses can return `status: "failed"`, `status: "partial"`, or `status: "canceled"`.
 - Error payload is structured as `{ stage, provider, message, retryable }`.
 
 Run CLI:
@@ -102,6 +104,8 @@ rim health
 rim analyze --idea "Your idea here" --mode deep --json
 rim analyze --idea "Your idea here" --mode deep --run-id demo-run-1 --json
 rim run list --limit 10 --status completed
+rim run cancel <run_id>
+rim run retry <run_id>
 rim run logs <run_id>
 rim run feedback <run_id> --verdict accept --notes "Strong output"
 rim eval run --mode deep --limit 3

@@ -230,6 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
+- Latest validation snapshot (post-v0.2 run-controls increment): `70` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -247,12 +248,13 @@ Each run must return JSON with this minimum schema:
 - AC-11 Structured error contract + partial-run behavior + retries: done
 - AC-12 CI pipeline for compile + tests on push/PR: done
 - AC-13 Self-iteration harness with policy and hard gates: done
+- AC-14 Explicit run cancel/retry controls in API and CLI: done
 
 ## 19) Post-MVP Roadmap (v0.2)
 
 - Replace heuristic scoring with a stronger domain-weighted rubric
 - Finalize a canonical 20-idea benchmark pack and blind-review process
-- Add explicit run cancel/retry controls in API and CLI
+- Add explicit run cancel/retry controls in API and CLI (done on February 14, 2026)
 - Add richer evaluation analytics (domain-level trend and regression dashboards)
 
 ## 20) SOTA Alignment Status (vs `rim_paper_4.docx`)
@@ -268,6 +270,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Structured synthesis with deep-mode multi-pass refinement.
 - Deep mode default across API and CLI.
 - Persistent run artifacts, memory retrieval filters, and feedback-driven memory rescoring.
+- Explicit run controls: cancel/retry in API (`/runs/{id}/cancel`, `/runs/{id}/retry`) and CLI (`rim run cancel`, `rim run retry`).
 - Provider orchestration guardrails (fallbacks, retries, determinism controls, and run budgets).
 - Benchmark/eval workflow with baseline, compare, and gate.
 

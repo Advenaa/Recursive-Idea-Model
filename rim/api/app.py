@@ -81,7 +81,7 @@ async def analyze(
 
 @app.get("/runs", response_model=RunListResponse)
 async def list_runs(
-    status: Literal["queued", "running", "completed", "failed", "partial"] | None = Query(
+    status: Literal["queued", "running", "completed", "failed", "partial", "canceled"] | None = Query(
         default=None
     ),
     mode: Literal["deep", "fast"] | None = Query(default=None),
@@ -101,6 +101,26 @@ async def get_run(run_id: str) -> AnalyzeRunResponse:
     run = orchestrator.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@app.post("/runs/{run_id}/cancel", response_model=AnalyzeRunResponse)
+async def cancel_run(run_id: str) -> AnalyzeRunResponse:
+    run = await job_queue.cancel(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@app.post("/runs/{run_id}/retry", response_model=AnalyzeRunResponse)
+async def retry_run(run_id: str, response: Response) -> AnalyzeRunResponse:
+    try:
+        run = await job_queue.retry(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    response.status_code = 202
     return run
 
 

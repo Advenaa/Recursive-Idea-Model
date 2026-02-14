@@ -5,6 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from rim.api.job_queue import RunJobQueue
 from rim.core.orchestrator import RimOrchestrator
 from rim.core.schemas import AnalyzeRequest
 from rim.eval.runner import (
@@ -145,6 +146,34 @@ def _cmd_run_feedback(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_run_cancel(args: argparse.Namespace) -> int:
+    repository = RunRepository()
+    orchestrator = RimOrchestrator(repository=repository, router=ProviderRouter())
+    queue = RunJobQueue(orchestrator=orchestrator, repository=repository)
+    run = await queue.cancel(args.run_id)
+    if run is None:
+        print("Run not found")
+        return 1
+    print(json.dumps(run.model_dump(), indent=2))
+    return 0
+
+
+async def _cmd_run_retry(args: argparse.Namespace) -> int:
+    repository = RunRepository()
+    orchestrator = RimOrchestrator(repository=repository, router=ProviderRouter())
+    queue = RunJobQueue(orchestrator=orchestrator, repository=repository)
+    try:
+        run = await queue.retry(args.run_id)
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    if run is None:
+        print("Run not found")
+        return 1
+    print(json.dumps(run.model_dump(), indent=2))
+    return 0
+
+
 async def _cmd_health() -> int:
     repository = RunRepository()
     router = ProviderRouter()
@@ -280,7 +309,10 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Inspect runs")
     run_sub = run.add_subparsers(dest="run_command", required=True)
     run_list = run_sub.add_parser("list", help="List runs")
-    run_list.add_argument("--status", choices=["queued", "running", "completed", "failed", "partial"])
+    run_list.add_argument(
+        "--status",
+        choices=["queued", "running", "completed", "failed", "partial", "canceled"],
+    )
     run_list.add_argument("--mode", choices=["deep", "fast"])
     run_list.add_argument("--limit", type=int, default=20)
     run_list.add_argument("--offset", type=int, default=0)
@@ -292,6 +324,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_feedback.add_argument("run_id")
     run_feedback.add_argument("--verdict", choices=["accept", "reject"], required=True)
     run_feedback.add_argument("--notes")
+    run_cancel = run_sub.add_parser("cancel", help="Cancel a queued/running run")
+    run_cancel.add_argument("run_id")
+    run_retry = run_sub.add_parser("retry", help="Retry a failed/partial/canceled run")
+    run_retry.add_argument("run_id")
 
     eval_parser = sub.add_parser("eval", help="Benchmark and scoring")
     eval_sub = eval_parser.add_subparsers(dest="eval_command", required=True)
@@ -354,6 +390,10 @@ def main() -> None:
         raise SystemExit(_cmd_run_logs(args))
     if args.command == "run" and args.run_command == "feedback":
         raise SystemExit(_cmd_run_feedback(args))
+    if args.command == "run" and args.run_command == "cancel":
+        raise SystemExit(asyncio.run(_cmd_run_cancel(args)))
+    if args.command == "run" and args.run_command == "retry":
+        raise SystemExit(asyncio.run(_cmd_run_retry(args)))
     if args.command == "eval" and args.eval_command == "run":
         raise SystemExit(asyncio.run(_cmd_eval_run(args)))
     if args.command == "eval" and args.eval_command == "duel":
