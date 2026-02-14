@@ -246,6 +246,7 @@ Each run must return JSON with this minimum schema:
 - AC-10 Benchmark baseline/compare/gate workflow: done
 - AC-11 Structured error contract + partial-run behavior + retries: done
 - AC-12 CI pipeline for compile + tests on push/PR: done
+- AC-13 Self-iteration harness with policy and hard gates: done
 
 ## 19) Post-MVP Roadmap (v0.2)
 

@@ -136,6 +136,16 @@ export RIM_MEMORY_MAX_AGE_DAYS=120
 export RIM_MEMORY_MIN_SEVERITY=medium
 ```
 
+Self-iteration loop:
+
+```bash
+scripts/self_iteration.sh prepare --objective "Improve queue reliability and logs"
+# apply code changes for this objective
+scripts/self_iteration.sh verify --iteration-dir artifacts/self-iterations/<iteration_dir>
+```
+
+Policy and guardrails: `docs/SELF_ITERATION_POLICY.md`
+
 ## Papers
 
 ### Main (SOTA)

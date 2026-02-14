@@ -471,3 +471,20 @@ RIM/
 5. Failure of one provider can fall back to the other for at least one retry.
 6. Run artifacts are persisted and retrievable via `GET /runs` and `GET /runs/{run_id}`.
 7. Re-submitting `POST /analyze` with same `run_id` is idempotent and does not create duplicate runs.
+
+## 17) Self-Iteration Workflow
+
+Local script: `scripts/self_iteration.sh`
+
+Phases:
+
+1. `prepare`:
+   - generate proposal via `rim analyze`,
+   - run compile + tests,
+   - store baseline eval report.
+2. `verify`:
+   - rerun compile + tests after edits,
+   - run eval report and regression gate against baseline,
+   - fail non-zero on gate failure.
+
+Guardrail policy: `docs/SELF_ITERATION_POLICY.md`
