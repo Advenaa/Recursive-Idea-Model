@@ -125,6 +125,7 @@ rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-ru
 rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
+rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 ```
 
 Provider env vars:
@@ -166,6 +167,8 @@ export RIM_ENABLE_MEMORY_FOLDING=1
 export RIM_MEMORY_FOLD_MAX_ENTRIES=12
 export RIM_MEMORY_FOLD_NOVELTY_FLOOR=0.35
 export RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO=0.5
+# Optional trained memory policy file from `rim eval train-memory-policy` output
+export RIM_MEMORY_POLICY_PATH=rim/eval/reports/memory_policy.json
 export RIM_ENABLE_DISAGREEMENT_ARBITRATION=1
 export RIM_ARBITRATION_MAX_JOBS=2
 export RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION=1

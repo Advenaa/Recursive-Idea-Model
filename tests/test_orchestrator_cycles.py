@@ -662,6 +662,129 @@ def test_orchestrator_applies_specialist_policy_file(
     assert arbitration_logs[0].meta["specialist_policy_path"] == str(policy_path)
 
 
+def test_orchestrator_applies_memory_policy_file(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    state = {"cycle": 0}
+    captured: dict[str, object] = {}
+
+    async def fake_decompose(*args, **kwargs):  # noqa: ANN001, ANN202
+        state["cycle"] += 1
+        root = DecompositionNode(
+            depth=0,
+            component_text=str(kwargs.get("idea") or args[1]),
+            node_type="claim",
+            confidence=0.4,
+        )
+        return [root], "codex", {"stop_reason": "max_depth"}
+
+    async def fake_critics(*args, **kwargs):  # noqa: ANN001, ANN202
+        nodes = kwargs.get("nodes") or args[1]
+        severity = "critical" if state["cycle"] == 1 else "medium"
+        return [
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="logic",
+                issue=f"issue cycle {state['cycle']}",
+                severity=severity,
+                confidence=0.8,
+                suggested_fix="fix",
+                provider="codex",
+            )
+        ]
+
+    async def fake_synthesize(*args, **kwargs):  # noqa: ANN001, ANN202
+        if state["cycle"] == 1:
+            return (
+                {
+                    "synthesized_idea": "Idea M refined once",
+                    "changes_summary": ["narrow scope"],
+                    "residual_risks": ["open risk"],
+                    "next_experiments": ["run pilot"],
+                    "confidence_score": 0.55,
+                },
+                ["claude"],
+            )
+        return (
+            {
+                "synthesized_idea": "Idea M refined twice",
+                "changes_summary": ["close open risk"],
+                "residual_risks": [],
+                "next_experiments": ["ship controlled rollout"],
+                "confidence_score": 0.91,
+            },
+            ["claude"],
+        )
+
+    def fake_fold_cycle_memory(*args, **kwargs):  # noqa: ANN001, ANN202
+        captured["max_entries"] = kwargs["max_entries"]
+        captured["novelty_floor"] = kwargs["novelty_floor"]
+        captured["max_duplicate_ratio"] = kwargs["max_duplicate_ratio"]
+        return {
+            "fold_version": "v2",
+            "folded_context": ["Folded context A"],
+            "episodic": ["Episodic A"],
+            "working": ["Working A"],
+            "tool": ["Tool A"],
+            "quality": {
+                "degradation_detected": False,
+                "degradation_reasons": [],
+                "novelty_ratio": 0.45,
+                "duplicate_ratio": 0.2,
+            },
+        }
+
+    policy_path = tmp_path / "memory_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "policy_env": {
+                        "RIM_ENABLE_MEMORY_FOLDING": 1,
+                        "RIM_MEMORY_FOLD_MAX_ENTRIES": 20,
+                        "RIM_MEMORY_FOLD_NOVELTY_FLOOR": 0.55,
+                        "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO": 0.3,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(orchestrator_module, "decompose_idea", fake_decompose)
+    monkeypatch.setattr(orchestrator_module, "run_critics", fake_critics)
+    monkeypatch.setattr(orchestrator_module, "synthesize_idea", fake_synthesize)
+    monkeypatch.setattr(orchestrator_module, "fold_cycle_memory", fake_fold_cycle_memory)
+    monkeypatch.setattr(orchestrator_module, "fold_to_memory_entries", lambda *args, **kwargs: [])
+    monkeypatch.setenv("RIM_MAX_ANALYSIS_CYCLES", "2")
+    monkeypatch.setenv("RIM_MEMORY_POLICY_PATH", str(policy_path))
+    monkeypatch.delenv("RIM_ENABLE_MEMORY_FOLDING", raising=False)
+    monkeypatch.delenv("RIM_MEMORY_FOLD_MAX_ENTRIES", raising=False)
+    monkeypatch.delenv("RIM_MEMORY_FOLD_NOVELTY_FLOOR", raising=False)
+    monkeypatch.delenv("RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO", raising=False)
+
+    repo = RunRepository(db_path=tmp_path / "rim_orchestrator_memory_policy.db")
+    orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
+    request = AnalyzeRequest(idea="Idea M", mode="deep")
+    run_id = orchestrator.create_run(request, status="running")
+
+    result = asyncio.run(orchestrator.execute_run(run_id, request))
+    assert result.synthesized_idea == "Idea M refined twice"
+    assert captured["max_entries"] == 20
+    assert captured["novelty_floor"] == 0.55
+    assert captured["max_duplicate_ratio"] == 0.3
+
+    fold_logs = [
+        log
+        for log in orchestrator.get_run_logs(run_id).logs
+        if log.stage == "memory_fold"
+    ]
+    assert len(fold_logs) == 1
+    assert fold_logs[0].meta["memory_policy_applied"] is True
+    assert fold_logs[0].meta["memory_policy_path"] == str(policy_path)
+
+
 def test_orchestrator_runs_executable_verification(
     tmp_path: Path,
     monkeypatch,  # noqa: ANN001

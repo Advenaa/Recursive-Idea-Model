@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + spawn/specialist-policy increments): `105` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + memory/spawn/specialist-policy increments): `107` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -279,7 +279,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 ### 20.2 Partially Implemented
 
 - Learning layer:
-  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version and degradation telemetry, but no adaptive strategy learning/meta-model for decomposition/challenge/synthesis policy updates.
+  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version/degradation telemetry, offline memory-policy training (`rim eval train-memory-policy`), and runtime policy loading (`RIM_MEMORY_POLICY_PATH`), but no online adaptive strategy learning/meta-model for decomposition/challenge/synthesis policy updates.
 - Orchestration depth/breadth policy:
   recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration (`rim eval calibrate`, `rim eval train-policy`) available, but there is no learned depth-vs-breadth policy training yet.
 - Challenge reconciliation:
@@ -293,7 +293,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 
 - Learned dynamic agent spawning and specialization (AgentSpawner-style policy-trained role/tool creation at runtime beyond current heuristic dynamic roles).
 - Full neuro-symbolic verification loops (formal theorem/constraint tooling, simulation, and external data-backed execution).
-- Long-horizon memory quality controls and adaptive fold policy optimization.
+- Online long-horizon memory quality controls and adaptive fold policy optimization.
 - RL-based orchestration training (PARL/ARPO/AEPO-style policy optimization and credit assignment).
 
 ### 20.4 Gap-Closure Priorities
@@ -302,7 +302,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 2. P0: evolve specialist arbitration from current offline-trained policy defaults to online adaptive specialist policy and dynamic role contracts.
 3. P1: evolve specialization from current offline spawn policy + heuristic dynamic contracts to learned dynamic role/tool selection contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
-5. P2: upgrade memory to episodic/working/tool stores and implement folding triggers.
+5. P2: evolve memory from current episodic/working/tool stores + offline policy tuning to online adaptive fold-quality optimization.
 6. P3: evolve current offline heuristic policy training (`rim eval train-policy`) to learned policy optimization and credit assignment.
 
 ### 20.5 Delivery Stages for Paper Parity

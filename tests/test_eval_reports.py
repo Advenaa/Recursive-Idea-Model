@@ -17,6 +17,7 @@ from rim.eval.runner import (
     save_blind_review_packet,
     save_report,
     train_depth_policy,
+    train_memory_policy,
     train_spawn_policy,
     train_specialist_arbitration_policy,
 )
@@ -531,4 +532,57 @@ def test_train_spawn_policy_aggregates_reports() -> None:
     assert "RIM_SPAWN_MIN_ROLE_SCORE" in env
     assert "RIM_SPAWN_MAX_SPECIALISTS_DEEP" in env
     assert "RIM_ENABLE_DYNAMIC_SPECIALISTS" in env
+    assert payload["recommended_exports"]
+
+
+def test_train_memory_policy_aggregates_reports() -> None:
+    reports = [
+        {
+            "created_at": "2026-02-14T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.56,
+            "average_runtime_sec": 63.0,
+            "failure_count": 1,
+            "runs": [
+                {
+                    "status": "completed",
+                    "telemetry": {
+                        "memory_fold_count": 2,
+                        "memory_fold_degradation_count": 1,
+                        "memory_fold_avg_novelty_ratio": 0.3,
+                        "memory_fold_avg_duplicate_ratio": 0.55,
+                    },
+                }
+            ],
+        },
+        {
+            "created_at": "2026-02-15T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.72,
+            "average_runtime_sec": 49.0,
+            "failure_count": 0,
+            "runs": [
+                {
+                    "status": "completed",
+                    "telemetry": {
+                        "memory_fold_count": 2,
+                        "memory_fold_degradation_count": 0,
+                        "memory_fold_avg_novelty_ratio": 0.5,
+                        "memory_fold_avg_duplicate_ratio": 0.3,
+                    },
+                }
+            ],
+        },
+    ]
+    payload = train_memory_policy(
+        reports,
+        target_quality=0.7,
+        target_runtime_sec=60.0,
+    )
+    assert payload["report_count"] == 2
+    env = payload["policy_env"]
+    assert "RIM_ENABLE_MEMORY_FOLDING" in env
+    assert "RIM_MEMORY_FOLD_MAX_ENTRIES" in env
+    assert "RIM_MEMORY_FOLD_NOVELTY_FLOOR" in env
+    assert "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO" in env
     assert payload["recommended_exports"]

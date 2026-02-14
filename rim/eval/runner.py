@@ -208,7 +208,13 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
         "specialist_count": 0,
         "spawn_selected_count": 0,
         "spawn_dynamic_count": 0,
+        "memory_fold_count": 0,
+        "memory_fold_degradation_count": 0,
+        "memory_fold_avg_novelty_ratio": 0.0,
+        "memory_fold_avg_duplicate_ratio": 0.0,
     }
+    memory_fold_novelty_total = 0.0
+    memory_fold_duplicate_total = 0.0
     for item in logs:
         stage = str(getattr(item, "stage", "")).strip().lower()
         meta = getattr(item, "meta", None)
@@ -253,7 +259,18 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
                 telemetry["spawn_dynamic_count"],
                 len(dynamic),
             )
+            continue
+        if stage == "memory_fold":
+            telemetry["memory_fold_count"] += 1
+            if bool(meta.get("degradation_detected")):
+                telemetry["memory_fold_degradation_count"] += 1
+            memory_fold_novelty_total += _to_float(meta.get("novelty_ratio"), 0.0)
+            memory_fold_duplicate_total += _to_float(meta.get("duplicate_ratio"), 0.0)
 
+    if telemetry["memory_fold_count"] > 0:
+        folds = float(telemetry["memory_fold_count"])
+        telemetry["memory_fold_avg_novelty_ratio"] = round(memory_fold_novelty_total / folds, 4)
+        telemetry["memory_fold_avg_duplicate_ratio"] = round(memory_fold_duplicate_total / folds, 4)
     if not any(value for value in telemetry.values()):
         return {}
     return telemetry
@@ -1342,6 +1359,303 @@ def train_spawn_policy(
             "average_failure_rate": round(avg_failure, 4),
             "average_disagreement_count": round(avg_disagreement, 4),
             "average_spawn_dynamic_count": round(avg_dynamic, 4),
+            "target_quality": target_quality,
+            "target_runtime_sec": target_runtime_sec,
+        },
+        "rationale": rationale,
+        "samples": samples[:20],
+    }
+
+
+def _memory_report_signals(report: dict[str, Any]) -> dict[str, float]:
+    runs = report.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    completed = [
+        item
+        for item in runs
+        if isinstance(item, dict) and str(item.get("status") or "").strip().lower() == "completed"
+    ]
+    if not completed:
+        return {
+            "completed_runs": 0.0,
+            "total_fold_count": 0.0,
+            "total_degradation_count": 0.0,
+            "degradation_rate": 0.0,
+            "avg_novelty_ratio": 0.0,
+            "avg_duplicate_ratio": 0.0,
+        }
+
+    fold_count_total = 0.0
+    degradation_total = 0.0
+    novelty_weighted_total = 0.0
+    duplicate_weighted_total = 0.0
+    for item in completed:
+        telemetry = item.get("telemetry")
+        if not isinstance(telemetry, dict):
+            continue
+        run_fold_count = _to_float(telemetry.get("memory_fold_count"), 0.0)
+        run_degradation = _to_float(telemetry.get("memory_fold_degradation_count"), 0.0)
+        run_novelty = _to_float(telemetry.get("memory_fold_avg_novelty_ratio"), 0.0)
+        run_duplicate = _to_float(telemetry.get("memory_fold_avg_duplicate_ratio"), 0.0)
+        fold_count_total += run_fold_count
+        degradation_total += run_degradation
+        novelty_weighted_total += run_novelty * max(run_fold_count, 1.0)
+        duplicate_weighted_total += run_duplicate * max(run_fold_count, 1.0)
+
+    effective_folds = max(fold_count_total, 1.0)
+    return {
+        "completed_runs": float(len(completed)),
+        "total_fold_count": fold_count_total,
+        "total_degradation_count": degradation_total,
+        "degradation_rate": round(degradation_total / effective_folds, 4),
+        "avg_novelty_ratio": round(novelty_weighted_total / effective_folds, 4),
+        "avg_duplicate_ratio": round(duplicate_weighted_total / effective_folds, 4),
+    }
+
+
+def calibrate_memory_fold_policy(
+    report: dict[str, Any],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    avg_quality = float(report.get("average_quality_score", 0.0))
+    avg_runtime = float(report.get("average_runtime_sec", 0.0))
+    dataset_size = max(1, int(report.get("dataset_size", 1)))
+    failures = int(report.get("failure_count", 0))
+    failure_rate = failures / float(dataset_size)
+    telemetry = _memory_report_signals(report)
+
+    quality_gap = float(target_quality) - avg_quality
+    quality_pressure = _clamp_float(quality_gap / max(float(target_quality), 0.05), -1.0, 1.0)
+    runtime_pressure = 0.0
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        runtime_pressure = (avg_runtime - float(target_runtime_sec)) / float(target_runtime_sec)
+    degradation_rate = _clamp_float(float(telemetry["degradation_rate"]), 0.0, 1.0)
+    novelty_ratio = _clamp_float(float(telemetry["avg_novelty_ratio"]), 0.0, 1.0)
+    duplicate_ratio = _clamp_float(float(telemetry["avg_duplicate_ratio"]), 0.0, 1.0)
+
+    memory_pressure = (
+        (0.65 * quality_pressure)
+        + (0.7 * degradation_rate)
+        + (0.3 * max(0.35 - novelty_ratio, 0.0))
+        + (0.2 * max(duplicate_ratio - 0.5, 0.0))
+        - (0.6 * max(runtime_pressure, 0.0))
+        - (0.4 * failure_rate)
+    )
+    memory_pressure = _clamp_float(memory_pressure, -1.0, 1.0)
+
+    base = {
+        "RIM_ENABLE_MEMORY_FOLDING": 1,
+        "RIM_MEMORY_FOLD_MAX_ENTRIES": 12,
+        "RIM_MEMORY_FOLD_NOVELTY_FLOOR": 0.35,
+        "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO": 0.5,
+    }
+    enable_folding = 1
+    if quality_pressure <= 0.0 and max(runtime_pressure, 0.0) > 0.45 and degradation_rate < 0.1:
+        enable_folding = 0
+    max_entries = _clamp_int(
+        int(round(base["RIM_MEMORY_FOLD_MAX_ENTRIES"] + (2.0 * max(memory_pressure, 0.0)) - (3.0 * max(runtime_pressure, 0.0)) - (2.0 * degradation_rate))),
+        6,
+        40,
+    )
+    novelty_floor = round(
+        _clamp_float(
+            base["RIM_MEMORY_FOLD_NOVELTY_FLOOR"] + (0.12 * degradation_rate) + (0.06 * quality_pressure) - (0.05 * max(runtime_pressure, 0.0)),
+            0.15,
+            0.8,
+        ),
+        3,
+    )
+    max_duplicate_ratio = round(
+        _clamp_float(
+            base["RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO"] - (0.2 * degradation_rate) - (0.08 * quality_pressure) + (0.12 * max(runtime_pressure, 0.0)),
+            0.2,
+            0.8,
+        ),
+        3,
+    )
+
+    rationale: list[str] = []
+    if degradation_rate > 0.2:
+        rationale.append("Memory fold degradation rate is elevated; tightening fold quality guardrails.")
+    if novelty_ratio < 0.35:
+        rationale.append("Novelty ratio is low; policy raises novelty floor expectations.")
+    if duplicate_ratio > 0.5:
+        rationale.append("Duplicate ratio is high; policy lowers duplicate tolerance.")
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        if avg_runtime > float(target_runtime_sec):
+            rationale.append("Average runtime exceeds target; fold budget is moderated.")
+        else:
+            rationale.append("Average runtime is within target runtime budget.")
+    if quality_pressure > 0.15:
+        rationale.append("Average quality is below target; memory fold quality controls are strengthened.")
+
+    recommended_env = {
+        "RIM_ENABLE_MEMORY_FOLDING": enable_folding,
+        "RIM_MEMORY_FOLD_MAX_ENTRIES": max_entries,
+        "RIM_MEMORY_FOLD_NOVELTY_FLOOR": novelty_floor,
+        "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO": max_duplicate_ratio,
+    }
+    return {
+        "inputs": {
+            "average_quality_score": avg_quality,
+            "average_runtime_sec": avg_runtime,
+            "failure_rate": round(failure_rate, 4),
+            "dataset_size": dataset_size,
+            "target_quality": float(target_quality),
+            "target_runtime_sec": target_runtime_sec,
+            "telemetry": telemetry,
+        },
+        "signals": {
+            "quality_pressure": round(quality_pressure, 4),
+            "runtime_pressure": round(runtime_pressure, 4),
+            "memory_pressure": round(memory_pressure, 4),
+            "degradation_rate": round(degradation_rate, 4),
+            "novelty_ratio": round(novelty_ratio, 4),
+            "duplicate_ratio": round(duplicate_ratio, 4),
+        },
+        "base": base,
+        "recommended_env": recommended_env,
+        "rationale": rationale,
+    }
+
+
+def train_memory_policy(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    valid_reports: list[dict[str, Any]] = []
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        if int(report.get("dataset_size", 0)) <= 0:
+            continue
+        valid_reports.append(report)
+
+    if not valid_reports:
+        empty_policy = {
+            "RIM_ENABLE_MEMORY_FOLDING": 1,
+            "RIM_MEMORY_FOLD_MAX_ENTRIES": 12,
+            "RIM_MEMORY_FOLD_NOVELTY_FLOOR": 0.35,
+            "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO": 0.5,
+        }
+        return {
+            "report_count": 0,
+            "policy_env": empty_policy,
+            "rationale": ["No valid reports were available; returning default memory policy."],
+        }
+
+    weighted: dict[str, float] = {
+        "RIM_ENABLE_MEMORY_FOLDING": 0.0,
+        "RIM_MEMORY_FOLD_MAX_ENTRIES": 0.0,
+        "RIM_MEMORY_FOLD_NOVELTY_FLOOR": 0.0,
+        "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO": 0.0,
+    }
+    total_weight = 0.0
+    quality_sum = 0.0
+    runtime_sum = 0.0
+    failure_sum = 0.0
+    degradation_sum = 0.0
+    novelty_sum = 0.0
+    duplicate_sum = 0.0
+    samples: list[dict[str, Any]] = []
+
+    for report in valid_reports:
+        calibration = calibrate_memory_fold_policy(
+            report,
+            target_quality=target_quality,
+            target_runtime_sec=target_runtime_sec,
+        )
+        env = calibration["recommended_env"]
+        report_quality = float(report.get("average_quality_score", 0.0))
+        report_failure = (
+            float(report.get("failure_count", 0)) / max(1, int(report.get("dataset_size", 1)))
+        )
+        telemetry = calibration.get("inputs", {}).get("telemetry", {})
+        degradation_rate = _to_float(
+            telemetry.get("degradation_rate") if isinstance(telemetry, dict) else 0.0,
+            0.0,
+        )
+        novelty_ratio = _to_float(
+            telemetry.get("avg_novelty_ratio") if isinstance(telemetry, dict) else 0.0,
+            0.0,
+        )
+        duplicate_ratio = _to_float(
+            telemetry.get("avg_duplicate_ratio") if isinstance(telemetry, dict) else 0.0,
+            0.0,
+        )
+        weight = max(0.1, report_quality + 0.15 - (0.25 * report_failure) + (0.1 * degradation_rate))
+        total_weight += weight
+        quality_sum += report_quality
+        runtime_sum += float(report.get("average_runtime_sec", 0.0))
+        failure_sum += report_failure
+        degradation_sum += degradation_rate
+        novelty_sum += novelty_ratio
+        duplicate_sum += duplicate_ratio
+        for key in weighted:
+            weighted[key] += float(env[key]) * weight
+        samples.append(
+            {
+                "created_at": report.get("created_at"),
+                "mode": report.get("mode"),
+                "weight": round(weight, 4),
+                "recommended_env": env,
+            }
+        )
+
+    if total_weight <= 0:
+        total_weight = float(len(valid_reports))
+    policy_env = {
+        "RIM_ENABLE_MEMORY_FOLDING": 1
+        if (weighted["RIM_ENABLE_MEMORY_FOLDING"] / total_weight) >= 0.5
+        else 0,
+        "RIM_MEMORY_FOLD_MAX_ENTRIES": _clamp_int(
+            int(round(weighted["RIM_MEMORY_FOLD_MAX_ENTRIES"] / total_weight)),
+            6,
+            40,
+        ),
+        "RIM_MEMORY_FOLD_NOVELTY_FLOOR": round(
+            _clamp_float(weighted["RIM_MEMORY_FOLD_NOVELTY_FLOOR"] / total_weight, 0.15, 0.8),
+            3,
+        ),
+        "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO": round(
+            _clamp_float(weighted["RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO"] / total_weight, 0.2, 0.8),
+            3,
+        ),
+    }
+    avg_quality = quality_sum / len(valid_reports)
+    avg_runtime = runtime_sum / len(valid_reports)
+    avg_failure = failure_sum / len(valid_reports)
+    avg_degradation = degradation_sum / len(valid_reports)
+    avg_novelty = novelty_sum / len(valid_reports)
+    avg_duplicate = duplicate_sum / len(valid_reports)
+    rationale = [
+        "Policy aggregates per-report memory calibration recommendations using weighted averaging.",
+    ]
+    if avg_degradation > 0.2:
+        rationale.append("Observed memory degradation is elevated, so quality guardrails are tightened.")
+    if avg_novelty < 0.35:
+        rationale.append("Observed novelty ratio is low, so novelty floor remains strict.")
+    if target_runtime_sec is not None and target_runtime_sec > 0 and avg_runtime > target_runtime_sec:
+        rationale.append("Average runtime exceeds target, so memory fold budget is moderated.")
+    if avg_quality < target_quality:
+        rationale.append("Average quality is below target, so memory fold controls remain active.")
+
+    return {
+        "report_count": len(valid_reports),
+        "policy_env": policy_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": policy_env}),
+        "summary": {
+            "average_quality_score": round(avg_quality, 4),
+            "average_runtime_sec": round(avg_runtime, 4),
+            "average_failure_rate": round(avg_failure, 4),
+            "average_memory_degradation_rate": round(avg_degradation, 4),
+            "average_memory_novelty_ratio": round(avg_novelty, 4),
+            "average_memory_duplicate_ratio": round(avg_duplicate, 4),
             "target_quality": target_quality,
             "target_runtime_sec": target_runtime_sec,
         },

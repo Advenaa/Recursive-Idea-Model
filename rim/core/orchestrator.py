@@ -239,6 +239,28 @@ def _load_specialist_policy_env(path_value: str) -> tuple[dict[str, object], str
     return filtered, None
 
 
+def _load_memory_policy_env(path_value: str) -> tuple[dict[str, object], str | None]:
+    path = str(path_value or "").strip()
+    if not path:
+        return {}, None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.loads(handle.read())
+    except Exception as exc:  # noqa: BLE001
+        return {}, str(exc)
+    env = _extract_policy_env(payload)
+    allowed = {
+        "RIM_ENABLE_MEMORY_FOLDING",
+        "RIM_MEMORY_FOLD_MAX_ENTRIES",
+        "RIM_MEMORY_FOLD_NOVELTY_FLOOR",
+        "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO",
+    }
+    filtered = {key: value for key, value in env.items() if key in allowed}
+    if not filtered:
+        return {}, "No memory-fold keys found in policy file."
+    return filtered, None
+
+
 def _next_cycle_memory_context(
     current_memory: list[str],
     synthesis: dict[str, object],
@@ -442,25 +464,59 @@ class RimOrchestrator:
             advanced_verify_external_data_cmd = os.getenv(
                 "RIM_ADV_VERIFY_EXTERNAL_DATA_CMD"
             )
+            memory_policy_path = str(os.getenv("RIM_MEMORY_POLICY_PATH", "")).strip()
+            memory_policy_env: dict[str, object] = {}
+            memory_policy_error: str | None = None
+            if memory_policy_path:
+                memory_policy_env, memory_policy_error = _load_memory_policy_env(
+                    memory_policy_path
+                )
+            memory_folding_default = request.mode == "deep"
+            memory_fold_max_entries_default = 12
+            memory_fold_novelty_floor_default = 0.35
+            memory_fold_max_duplicate_ratio_default = 0.5
+            if memory_policy_env:
+                memory_folding_default = _coerce_bool(
+                    memory_policy_env.get("RIM_ENABLE_MEMORY_FOLDING"),
+                    memory_folding_default,
+                )
+                memory_fold_max_entries_default = _coerce_int(
+                    memory_policy_env.get("RIM_MEMORY_FOLD_MAX_ENTRIES"),
+                    memory_fold_max_entries_default,
+                    lower=6,
+                    upper=40,
+                )
+                memory_fold_novelty_floor_default = _coerce_float(
+                    memory_policy_env.get("RIM_MEMORY_FOLD_NOVELTY_FLOOR"),
+                    memory_fold_novelty_floor_default,
+                    lower=0.0,
+                    upper=1.0,
+                )
+                memory_fold_max_duplicate_ratio_default = _coerce_float(
+                    memory_policy_env.get("RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO"),
+                    memory_fold_max_duplicate_ratio_default,
+                    lower=0.0,
+                    upper=1.0,
+                )
             enable_memory_folding = _parse_bool_env(
                 "RIM_ENABLE_MEMORY_FOLDING",
-                request.mode == "deep",
+                memory_folding_default,
             )
             memory_fold_max_entries = _parse_int_env(
                 "RIM_MEMORY_FOLD_MAX_ENTRIES",
-                12,
+                memory_fold_max_entries_default,
                 lower=6,
                 upper=40,
             )
             memory_fold_novelty_floor = _parse_float_env(
                 "RIM_MEMORY_FOLD_NOVELTY_FLOOR",
-                0.35,
+                memory_fold_novelty_floor_default,
                 lower=0.0,
                 upper=1.0,
             )
             memory_fold_max_duplicate_ratio = _parse_float_env(
                 "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO",
-                0.5,
+                memory_fold_max_duplicate_ratio_default,
                 lower=0.0,
                 upper=1.0,
             )
@@ -541,6 +597,9 @@ class RimOrchestrator:
                 meta={
                     "mode": request.mode,
                     "max_cycles": max_cycles,
+                    "memory_policy_applied": bool(memory_policy_env),
+                    "memory_policy_path": memory_policy_path or None,
+                    "memory_policy_error": memory_policy_error,
                     "specialist_policy_applied": bool(specialist_policy_env),
                     "specialist_policy_path": specialist_policy_path or None,
                     "specialist_policy_error": specialist_policy_error,
@@ -1003,6 +1062,9 @@ class RimOrchestrator:
                             )[:4],
                             "novelty_ratio": fold_quality.get("novelty_ratio", 0.0),
                             "duplicate_ratio": fold_quality.get("duplicate_ratio", 0.0),
+                            "memory_policy_applied": bool(memory_policy_env),
+                            "memory_policy_path": memory_policy_path or None,
+                            "memory_policy_error": memory_policy_error,
                         },
                     )
                 else:
