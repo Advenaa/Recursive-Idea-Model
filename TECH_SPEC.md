@@ -138,6 +138,8 @@ Environment variables:
 30. `RIM_VERIFY_MIN_FINDING_OVERLAP` default `0.35` (minimum lexical overlap for high-risk finding coverage)
 31. `RIM_ENABLE_MEMORY_FOLDING` default `1` in deep mode (fold cycle context into compact tripartite memory)
 32. `RIM_MEMORY_FOLD_MAX_ENTRIES` default `12` (max folded context entries carried to next cycle)
+33. `RIM_ENABLE_DISAGREEMENT_ARBITRATION` default `1` in deep mode (resolve critique disagreements before synthesis)
+34. `RIM_ARBITRATION_MAX_JOBS` default `2` (max disagreement arbitration calls per cycle)
 
 ## 5) Modes and Runtime Controls
 
@@ -366,14 +368,15 @@ Additional eval commands:
 3. `decompose` (cycle N)
 4. `challenge_parallel` (cycle N)
 5. `challenge_reconciliation` (consensus/disagreement aggregation)
-6. `synthesis` (cycle N)
-7. `verification` (deterministic constraint/risk coverage checks)
-8. `depth_allocator` (decide recurse or stop)
-9. `memory_fold` (when recursing; compact episodic/working/tool summaries)
-10. Repeat steps 3-9 while recursion decision is true and cycle budget remains
-11. `memory_write`
-12. `provider_budget`
-13. `finalize`
+6. `challenge_arbitration` (optional disagreement resolution calls)
+7. `synthesis` (cycle N)
+8. `verification` (deterministic constraint/risk coverage checks)
+9. `depth_allocator` (decide recurse or stop)
+10. `memory_fold` (when recursing; compact episodic/working/tool summaries)
+11. Repeat steps 3-10 while recursion decision is true and cycle budget remains
+12. `memory_write`
+13. `provider_budget`
+14. `finalize`
 
 ### 9.2 Parallel Challenge
 

@@ -10,6 +10,20 @@ from rim.storage.repo import RunRepository
 
 
 class DummyProviderSession:
+    async def invoke_json(self, stage: str, prompt: str, json_schema=None):  # noqa: ANN001, ANN201
+        if stage != "critic_arbitration":
+            raise AssertionError("unexpected stage")
+        return (
+            {
+                "node_id": "n1",
+                "resolved_issue": "Merge disagreements into one prioritized risk.",
+                "rationale": "Concerns overlap and should be addressed together.",
+                "action": "merge",
+                "confidence": 0.8,
+            },
+            "codex",
+        )
+
     def get_usage_meta(self) -> dict:
         return {
             "run_id": "dummy",
@@ -243,3 +257,76 @@ def test_orchestrator_verification_penalizes_uncovered_output(
     ]
     assert len(verification_logs) == 1
     assert verification_logs[0].meta["failed_checks"] >= 1
+
+
+def test_orchestrator_runs_disagreement_arbitration(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    async def fake_decompose(*args, **kwargs):  # noqa: ANN001, ANN202
+        root = DecompositionNode(
+            depth=0,
+            component_text="Idea D",
+            node_type="claim",
+            confidence=0.4,
+        )
+        return [root], "codex", {"stop_reason": "max_depth"}
+
+    async def fake_critics(*args, **kwargs):  # noqa: ANN001, ANN202
+        nodes = kwargs.get("nodes") or args[1]
+        return [
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="logic",
+                issue="No rollout criteria",
+                severity="high",
+                confidence=0.8,
+                suggested_fix="Define criteria",
+                provider="codex",
+            ),
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="execution",
+                issue="Unclear deployment gating",
+                severity="high",
+                confidence=0.7,
+                suggested_fix="Add gates",
+                provider="claude",
+            ),
+        ]
+
+    async def fake_synthesize(*args, **kwargs):  # noqa: ANN001, ANN202
+        return (
+            {
+                "synthesized_idea": "Idea D refined",
+                "changes_summary": ["Added rollout gating rules."],
+                "residual_risks": [],
+                "next_experiments": ["Test rollout gates on staging."],
+                "confidence_score": 0.82,
+            },
+            ["claude"],
+        )
+
+    monkeypatch.setattr(orchestrator_module, "decompose_idea", fake_decompose)
+    monkeypatch.setattr(orchestrator_module, "run_critics", fake_critics)
+    monkeypatch.setattr(orchestrator_module, "synthesize_idea", fake_synthesize)
+    monkeypatch.setenv("RIM_MAX_ANALYSIS_CYCLES", "1")
+    monkeypatch.setenv("RIM_ENABLE_DISAGREEMENT_ARBITRATION", "1")
+    monkeypatch.setenv("RIM_ARBITRATION_MAX_JOBS", "2")
+
+    repo = RunRepository(db_path=tmp_path / "rim_orchestrator_arbitration.db")
+    orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
+    request = AnalyzeRequest(idea="Idea D", mode="deep")
+    run_id = orchestrator.create_run(request, status="running")
+
+    result = asyncio.run(orchestrator.execute_run(run_id, request))
+    assert result.synthesized_idea == "Idea D refined"
+
+    arbitration_logs = [
+        log
+        for log in orchestrator.get_run_logs(run_id).logs
+        if log.stage == "challenge_arbitration"
+    ]
+    assert len(arbitration_logs) == 1
+    assert arbitration_logs[0].status == "completed"
+    assert arbitration_logs[0].meta["resolved_count"] >= 1

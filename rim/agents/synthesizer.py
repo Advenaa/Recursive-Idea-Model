@@ -56,6 +56,9 @@ Critic findings:
 Critique reconciliation:
 {reconciliation}
 
+Arbitration decisions:
+{arbitrations}
+
 Memory context from prior runs:
 {memory_context}
 """
@@ -119,6 +122,22 @@ def _reconciliation_block(reconciliation: dict[str, Any] | None) -> str:
     return json.dumps(payload)
 
 
+def _arbitrations_block(arbitrations: list[dict[str, Any]] | None) -> str:
+    if not arbitrations:
+        return "none"
+    compact = [
+        {
+            "node_id": item.get("node_id"),
+            "resolved_issue": item.get("resolved_issue"),
+            "action": item.get("action"),
+            "confidence": item.get("confidence"),
+        }
+        for item in arbitrations[:6]
+        if isinstance(item, dict)
+    ]
+    return json.dumps(compact)
+
+
 async def synthesize_idea(
     router: ProviderRouter,
     idea: str,
@@ -127,6 +146,7 @@ async def synthesize_idea(
     settings: ModeSettings,
     memory_context: list[str] | None = None,
     reconciliation: dict[str, Any] | None = None,
+    arbitrations: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     node_view = [
         {
@@ -153,6 +173,7 @@ async def synthesize_idea(
         nodes=node_view,
         findings=finding_view,
         reconciliation=_reconciliation_block(reconciliation),
+        arbitrations=_arbitrations_block(arbitrations),
         memory_context=_memory_context_block(memory_context),
     )
     primary_payload, primary_provider = await router.invoke_json(

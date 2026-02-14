@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from rim.agents.critics import run_critics
 from rim.agents.decomposer import decompose_idea
+from rim.agents.arbitrator import run_arbitration
 from rim.agents.reconciliation import reconcile_findings
 from rim.agents.synthesizer import synthesize_idea
 from rim.agents.verification import verify_synthesis
@@ -300,6 +301,16 @@ class RimOrchestrator:
                 lower=6,
                 upper=40,
             )
+            enable_arbitration = _parse_bool_env(
+                "RIM_ENABLE_DISAGREEMENT_ARBITRATION",
+                request.mode == "deep",
+            )
+            arbitration_max_jobs = _parse_int_env(
+                "RIM_ARBITRATION_MAX_JOBS",
+                2,
+                lower=0,
+                upper=6,
+            )
             self.repository.mark_run_status(run_id=run_id, status="running")
             self.repository.log_stage(
                 run_id=run_id,
@@ -381,6 +392,43 @@ class RimOrchestrator:
                     status="completed",
                     meta={"cycle": cycle, **reconciliation["summary"]},
                 )
+                arbitrations: list[dict[str, object]] = []
+                if enable_arbitration and reconciliation["summary"]["disagreement_count"] > 0:
+                    arbitration_started = time.perf_counter()
+                    try:
+                        arbitrations, arbitration_providers = await run_arbitration(
+                            provider_session,
+                            reconciliation=reconciliation,
+                            findings=findings,
+                            max_jobs=arbitration_max_jobs,
+                        )
+                        self.repository.log_stage(
+                            run_id=run_id,
+                            stage="challenge_arbitration",
+                            status="completed",
+                            provider=",".join(arbitration_providers) if arbitration_providers else None,
+                            latency_ms=int((time.perf_counter() - arbitration_started) * 1000),
+                            meta={
+                                "cycle": cycle,
+                                "jobs_requested": min(
+                                    arbitration_max_jobs,
+                                    int(reconciliation["summary"]["disagreement_count"]),
+                                ),
+                                "resolved_count": len(arbitrations),
+                            },
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        self.repository.log_stage(
+                            run_id=run_id,
+                            stage="challenge_arbitration",
+                            status="failed",
+                            latency_ms=int((time.perf_counter() - arbitration_started) * 1000),
+                            meta={
+                                "cycle": cycle,
+                                "error": _error_from_exception(exc, default_stage="challenge_arbitration"),
+                            },
+                        )
+                        arbitrations = []
 
                 synth_started = time.perf_counter()
                 try:
@@ -392,6 +440,7 @@ class RimOrchestrator:
                         settings,
                         memory_context=working_memory_context,
                         reconciliation=reconciliation,
+                        arbitrations=arbitrations,
                     )
                     self.repository.log_stage(
                         run_id=run_id,
