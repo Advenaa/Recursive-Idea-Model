@@ -279,7 +279,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 ### 20.2 Partially Implemented
 
 - Learning layer:
-  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version/degradation telemetry, offline memory-policy training (`rim eval train-memory-policy`), and runtime policy loading (`RIM_MEMORY_POLICY_PATH`), but no online adaptive strategy learning/meta-model for decomposition/challenge/synthesis policy updates.
+  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version/degradation telemetry, offline memory-policy training (`rim eval train-memory-policy`), runtime policy loading (`RIM_MEMORY_POLICY_PATH`), and autolearn-driven online policy refresh (`rim eval autolearn`), but no long-horizon memory quality controller/meta-model for decomposition/challenge/synthesis policy updates.
 - Orchestration depth/breadth policy:
   recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration/training (`rim eval calibrate`, `rim eval train-policy`), automated online update loop (`rim eval autolearn` with `RIM_DEPTH_POLICY_PATH`), and RL-style reward/advantage credit assignment (`rim eval train-rl-policy`) available; full PARL/ARPO/AEPO-grade policy optimization is still missing.
 - Challenge reconciliation:
@@ -302,7 +302,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 2. P0: evolve specialist arbitration from current heuristic+online+RL-light policy defaults to full RL adaptive specialist policy and dynamic role contracts.
 3. P1: evolve specialization from current offline spawn policy + heuristic dynamic contracts to learned dynamic role/tool selection contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
-5. P2: evolve memory from current episodic/working/tool stores + offline policy tuning to online adaptive fold-quality optimization.
+5. P2: evolve memory from current episodic/working/tool stores + online policy refresh to long-horizon adaptive fold-quality optimization.
 6. P3: evolve current offline heuristic policy training (`rim eval train-policy`) to learned policy optimization and credit assignment.
 
 ### 20.5 Delivery Stages for Paper Parity

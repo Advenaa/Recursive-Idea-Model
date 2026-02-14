@@ -422,7 +422,7 @@ Additional eval commands:
 11. `rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into specialization spawn-policy defaults.
 12. `rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into memory-fold policy defaults.
 13. `rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3` to run RL-style reward/advantage credit assignment and produce depth + specialist policy updates.
-14. `rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3` to run benchmark cycles and auto-update depth + specialist policies from fresh telemetry.
+14. `rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3` to run benchmark cycles and auto-update depth + specialist + memory policies from fresh telemetry.
 
 ## 9) Orchestration Logic
 

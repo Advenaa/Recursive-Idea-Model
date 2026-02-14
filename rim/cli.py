@@ -516,6 +516,7 @@ async def _cmd_eval_autolearn(args: argparse.Namespace) -> int:
         reports_dir=reports_dir,
         depth_policy_path=Path(args.depth_policy_path),
         specialist_policy_path=Path(args.specialist_policy_path),
+        memory_policy_path=Path(args.memory_policy_path),
     )
     if args.save:
         Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -702,6 +703,10 @@ def build_parser() -> argparse.ArgumentParser:
     eval_autolearn.add_argument(
         "--specialist-policy-path",
         default="rim/eval/policies/specialist_policy.json",
+    )
+    eval_autolearn.add_argument(
+        "--memory-policy-path",
+        default="rim/eval/policies/memory_policy.json",
     )
     eval_autolearn.add_argument("--save")
 

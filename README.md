@@ -128,6 +128,7 @@ rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65
 rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3
+# autolearn updates depth/specialist/memory policy files under rim/eval/policies by default
 ```
 
 Provider env vars:

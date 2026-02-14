@@ -1943,6 +1943,40 @@ def _blend_specialist_policy_env(
     }
 
 
+def _blend_memory_policy_env(
+    *,
+    prior_env: dict[str, Any] | None,
+    fresh_env: dict[str, Any],
+    learning_rate: float,
+) -> dict[str, Any]:
+    prior = prior_env or {}
+    alpha = _clamp_float(float(learning_rate), 0.0, 1.0)
+    enable_prior = _to_float(prior.get("RIM_ENABLE_MEMORY_FOLDING"), 1.0)
+    enable_fresh = _to_float(fresh_env.get("RIM_ENABLE_MEMORY_FOLDING"), 1.0)
+    enable_score = ((1.0 - alpha) * enable_prior) + (alpha * enable_fresh)
+    max_entries = (1.0 - alpha) * _to_float(prior.get("RIM_MEMORY_FOLD_MAX_ENTRIES"), 12.0)
+    max_entries += alpha * _to_float(fresh_env.get("RIM_MEMORY_FOLD_MAX_ENTRIES"), 12.0)
+    novelty_floor = (1.0 - alpha) * _to_float(prior.get("RIM_MEMORY_FOLD_NOVELTY_FLOOR"), 0.35)
+    novelty_floor += alpha * _to_float(fresh_env.get("RIM_MEMORY_FOLD_NOVELTY_FLOOR"), 0.35)
+    max_duplicate_ratio = (1.0 - alpha) * _to_float(
+        prior.get("RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO"),
+        0.5,
+    )
+    max_duplicate_ratio += alpha * _to_float(
+        fresh_env.get("RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO"),
+        0.5,
+    )
+    return {
+        "RIM_ENABLE_MEMORY_FOLDING": 1 if enable_score >= 0.5 else 0,
+        "RIM_MEMORY_FOLD_MAX_ENTRIES": _clamp_int(int(round(max_entries)), 6, 40),
+        "RIM_MEMORY_FOLD_NOVELTY_FLOOR": round(_clamp_float(novelty_floor, 0.15, 0.8), 3),
+        "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO": round(
+            _clamp_float(max_duplicate_ratio, 0.2, 0.8),
+            3,
+        ),
+    }
+
+
 def _valid_training_reports(
     reports: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -2026,6 +2060,47 @@ def train_online_depth_and_arbitration_policies(
         "depth_policy": depth_payload,
         "specialist_policy": specialist_payload,
         "recommended_exports": combined_exports,
+    }
+
+
+def train_online_memory_policy(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+    learning_rate: float = 0.35,
+    prior_memory_policy_env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    valid_reports, report_ids = _valid_training_reports(reports)
+    candidate = train_memory_policy(
+        valid_reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+    )
+    alpha = _clamp_float(float(learning_rate), 0.0, 1.0)
+    memory_env = _blend_memory_policy_env(
+        prior_env=prior_memory_policy_env,
+        fresh_env=dict(candidate.get("policy_env") or {}),
+        learning_rate=alpha,
+    )
+    payload = {
+        **candidate,
+        "policy_env": memory_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": memory_env}),
+        "blend": {
+            "learning_rate": alpha,
+            "prior_policy_env": prior_memory_policy_env or {},
+            "candidate_policy_env": candidate.get("policy_env") or {},
+        },
+    }
+    return {
+        "report_count": len(valid_reports),
+        "report_ids": report_ids,
+        "learning_rate": alpha,
+        "target_quality": target_quality,
+        "target_runtime_sec": target_runtime_sec,
+        "memory_policy": payload,
+        "recommended_exports": payload["recommended_exports"],
     }
 
 
@@ -2400,6 +2475,7 @@ async def run_online_depth_arbitration_learning_loop(
     reports_dir: Path = DEFAULT_REPORTS_DIR,
     depth_policy_path: Path = DEFAULT_POLICIES_DIR / "depth_policy.json",
     specialist_policy_path: Path = DEFAULT_POLICIES_DIR / "specialist_policy.json",
+    memory_policy_path: Path = DEFAULT_POLICIES_DIR / "memory_policy.json",
 ) -> dict[str, Any]:
     cycles = _clamp_int(int(iterations), 1, 24)
     lookback = _clamp_int(int(lookback_reports), 1, 60)
@@ -2413,11 +2489,14 @@ async def run_online_depth_arbitration_learning_loop(
     reports_dir.mkdir(parents=True, exist_ok=True)
     depth_policy_path.parent.mkdir(parents=True, exist_ok=True)
     specialist_policy_path.parent.mkdir(parents=True, exist_ok=True)
+    memory_policy_path.parent.mkdir(parents=True, exist_ok=True)
 
     previous_depth_path = os.getenv("RIM_DEPTH_POLICY_PATH")
     previous_specialist_path = os.getenv("RIM_SPECIALIST_POLICY_PATH")
+    previous_memory_path = os.getenv("RIM_MEMORY_POLICY_PATH")
     os.environ["RIM_DEPTH_POLICY_PATH"] = str(depth_policy_path)
     os.environ["RIM_SPECIALIST_POLICY_PATH"] = str(specialist_policy_path)
+    os.environ["RIM_MEMORY_POLICY_PATH"] = str(memory_policy_path)
     cycle_outputs: list[dict[str, Any]] = []
     try:
         for cycle in range(1, cycles + 1):
@@ -2458,6 +2537,14 @@ async def run_online_depth_arbitration_learning_loop(
                     prior_depth_policy_env=prior_depth_env,
                     prior_specialist_policy_env=prior_specialist_env,
                 )
+            prior_memory_env = load_policy_env(memory_policy_path)
+            memory_learning = train_online_memory_policy(
+                training_reports,
+                target_quality=target_quality,
+                target_runtime_sec=target_runtime_sec,
+                learning_rate=alpha,
+                prior_memory_policy_env=prior_memory_env,
+            )
             depth_save_path = save_policy_artifact(
                 learning["depth_policy"],
                 policy_kind="depth",
@@ -2482,6 +2569,18 @@ async def run_online_depth_arbitration_learning_loop(
                     "report_path": str(report_path),
                 },
             )
+            memory_save_path = save_policy_artifact(
+                memory_learning["memory_policy"],
+                policy_kind="memory",
+                source_reports=training_paths,
+                output_path=memory_policy_path,
+                learning_meta={
+                    "cycle": cycle,
+                    "iterations": cycles,
+                    "learning_rate": alpha,
+                    "report_path": str(report_path),
+                },
+            )
             cycle_outputs.append(
                 {
                     "cycle": cycle,
@@ -2496,8 +2595,10 @@ async def run_online_depth_arbitration_learning_loop(
                     "optimizer": learning.get("optimizer", optimizer_name),
                     "depth_policy_path": str(depth_save_path),
                     "specialist_policy_path": str(specialist_save_path),
+                    "memory_policy_path": str(memory_save_path),
                     "depth_policy_env": learning["depth_policy"]["policy_env"],
                     "specialist_policy_env": learning["specialist_policy"]["policy_env"],
+                    "memory_policy_env": memory_learning["memory_policy"]["policy_env"],
                 }
             )
     finally:
@@ -2509,6 +2610,10 @@ async def run_online_depth_arbitration_learning_loop(
             os.environ.pop("RIM_SPECIALIST_POLICY_PATH", None)
         else:
             os.environ["RIM_SPECIALIST_POLICY_PATH"] = previous_specialist_path
+        if previous_memory_path is None:
+            os.environ.pop("RIM_MEMORY_POLICY_PATH", None)
+        else:
+            os.environ["RIM_MEMORY_POLICY_PATH"] = previous_memory_path
 
     return {
         "mode": mode,
@@ -2524,9 +2629,11 @@ async def run_online_depth_arbitration_learning_loop(
         "target_runtime_sec": target_runtime_sec,
         "depth_policy_path": str(depth_policy_path),
         "specialist_policy_path": str(specialist_policy_path),
+        "memory_policy_path": str(memory_policy_path),
         "recommended_exports": [
             f"export RIM_DEPTH_POLICY_PATH={depth_policy_path}",
             f"export RIM_SPECIALIST_POLICY_PATH={specialist_policy_path}",
+            f"export RIM_MEMORY_POLICY_PATH={memory_policy_path}",
         ],
         "cycles": cycle_outputs,
         "final": cycle_outputs[-1] if cycle_outputs else None,

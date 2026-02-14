@@ -731,6 +731,7 @@ def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path
     reports_dir = tmp_path / "reports"
     depth_policy_path = tmp_path / "policies" / "depth_policy.json"
     specialist_policy_path = tmp_path / "policies" / "specialist_policy.json"
+    memory_policy_path = tmp_path / "policies" / "memory_policy.json"
 
     payload = asyncio.run(
         run_online_depth_arbitration_learning_loop(
@@ -748,10 +749,14 @@ def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path
             reports_dir=reports_dir,
             depth_policy_path=depth_policy_path,
             specialist_policy_path=specialist_policy_path,
+            memory_policy_path=memory_policy_path,
         )
     )
     assert payload["iterations"] == 1
     assert payload["optimizer"] == "rl"
     assert depth_policy_path.exists() is True
     assert specialist_policy_path.exists() is True
+    assert memory_policy_path.exists() is True
+    assert payload["memory_policy_path"] == str(memory_policy_path)
+    assert payload["final"]["memory_policy_path"] == str(memory_policy_path)
     assert payload["final"]["training_report_count"] >= 1
