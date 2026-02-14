@@ -119,8 +119,9 @@ Environment variables:
 11. `RIM_RUN_MAX_ESTIMATED_TOKENS` default `500000`
 12. `RIM_RUN_MAX_ESTIMATED_COST_USD` default `10.0`
 13. `RIM_QUEUE_WORKERS` default `1`
-14. `RIM_MEMORY_MAX_AGE_DAYS` default `120`
-15. `RIM_MEMORY_MIN_SEVERITY` default `medium` (or `low` for deep-mode override)
+14. `RIM_JSON_REPAIR_RETRIES` default `1` (retry invalid JSON response once before provider fallback)
+15. `RIM_MEMORY_MAX_AGE_DAYS` default `120`
+16. `RIM_MEMORY_MIN_SEVERITY` default `medium` (or `low` for deep-mode override)
 
 ## 5) Modes and Runtime Controls
 

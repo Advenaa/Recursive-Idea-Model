@@ -19,6 +19,23 @@ DEFAULT_STAGE_POLICY: dict[str, list[str]] = {
 }
 
 
+def _json_repair_prompt(
+    *,
+    stage: str,
+    original_prompt: str,
+    error: str,
+) -> str:
+    return (
+        f"{original_prompt}\n\n"
+        "Previous response could not be parsed as valid JSON.\n"
+        f"Stage: {stage}\n"
+        f"Error: {error}\n\n"
+        "Retry now. Return one strict JSON object only.\n"
+        "Do not wrap in markdown fences.\n"
+        "Do not include explanation text.\n"
+    )
+
+
 @dataclass
 class RunBudget:
     max_calls: int
@@ -54,12 +71,14 @@ class ProviderRunSession:
         stage_policy: dict[str, list[str]],
         timeout_sec: int,
         budget: RunBudget,
+        json_repair_attempts: int = 1,
     ) -> None:
         self.run_id = run_id
         self.providers = providers
         self.stage_policy = stage_policy
         self.timeout_sec = timeout_sec
         self.budget = budget
+        self.json_repair_attempts = max(0, int(json_repair_attempts))
         self.usage = RunUsage()
         self.provider_results: list[ProviderResult] = []
 
@@ -161,20 +180,35 @@ class ProviderRunSession:
         errors: list[str] = []
         config = ProviderConfig(timeout_sec=self.timeout_sec)
         for provider_name in self._providers_for_stage(stage):
-            self._check_budget_before_call()
             adapter = self.providers[provider_name]
-            try:
-                payload, result = await adapter.invoke_json_with_result(
-                    prompt=prompt,
-                    config=config,
-                    json_schema=json_schema,
-                )
-                self._apply_result_to_usage(result)
-                return payload, provider_name
-            except BudgetExceededError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{provider_name}: {exc}")
+            attempt_prompt = prompt
+            for attempt in range(self.json_repair_attempts + 1):
+                self._check_budget_before_call()
+                try:
+                    payload, result = await adapter.invoke_json_with_result(
+                        prompt=attempt_prompt,
+                        config=config,
+                        json_schema=json_schema,
+                    )
+                    self._apply_result_to_usage(result)
+                    return payload, provider_name
+                except BudgetExceededError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    suffix = (
+                        " (repair retry)"
+                        if attempt < self.json_repair_attempts
+                        else ""
+                    )
+                    errors.append(f"{provider_name}: {exc}{suffix}")
+                    if attempt < self.json_repair_attempts:
+                        attempt_prompt = _json_repair_prompt(
+                            stage=stage,
+                            original_prompt=prompt,
+                            error=str(exc),
+                        )
+                        continue
+                    break
         raise RuntimeError(
             f"All providers failed for stage '{stage}'. " + "; ".join(errors)
         )
@@ -194,6 +228,7 @@ class ProviderRouter:
             max_tokens=int(os.getenv("RIM_RUN_MAX_ESTIMATED_TOKENS", "500000")),
             max_estimated_cost_usd=float(os.getenv("RIM_RUN_MAX_ESTIMATED_COST_USD", "10.0")),
         )
+        self.default_json_repair_attempts = int(os.getenv("RIM_JSON_REPAIR_RETRIES", "1"))
 
     async def healthcheck(self) -> dict[str, bool]:
         return {
@@ -208,6 +243,7 @@ class ProviderRouter:
             stage_policy=self.stage_policy,
             timeout_sec=self.default_timeout_sec,
             budget=self.default_budget,
+            json_repair_attempts=self.default_json_repair_attempts,
         )
 
     async def invoke_text(self, stage: str, prompt: str) -> tuple[str, str]:
