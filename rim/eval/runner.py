@@ -45,6 +45,19 @@ def _summarize_report(
     total_runtime_sec: float,
     runs: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    completed_runs = [
+        item
+        for item in runs
+        if item.get("status", "completed") == "completed"
+        and isinstance(item.get("quality"), dict)
+        and isinstance(item["quality"].get("quality_score"), (int, float))
+    ]
+    failed_runs = [item for item in runs if item.get("status") == "failed"]
+    failure_modes: dict[str, int] = {}
+    for item in failed_runs:
+        mode_name = str(item.get("error_type") or "UnknownError")
+        failure_modes[mode_name] = failure_modes.get(mode_name, 0) + 1
+
     if not runs:
         return {
             "created_at": started_at,
@@ -54,11 +67,19 @@ def _summarize_report(
             "total_runtime_sec": total_runtime_sec,
             "average_runtime_sec": 0.0,
             "average_quality_score": 0.0,
+            "success_count": 0,
+            "failure_count": 0,
+            "failure_modes": {},
             "runs": [],
         }
 
-    avg_runtime = sum(item["runtime_sec"] for item in runs) / len(runs)
-    avg_quality = sum(item["quality"]["quality_score"] for item in runs) / len(runs)
+    avg_runtime = 0.0
+    avg_quality = 0.0
+    if completed_runs:
+        avg_runtime = sum(item["runtime_sec"] for item in completed_runs) / len(completed_runs)
+        avg_quality = sum(item["quality"]["quality_score"] for item in completed_runs) / len(
+            completed_runs
+        )
     return {
         "created_at": started_at,
         "dataset_size": len(runs),
@@ -67,6 +88,9 @@ def _summarize_report(
         "total_runtime_sec": total_runtime_sec,
         "average_runtime_sec": round(avg_runtime, 3),
         "average_quality_score": round(avg_quality, 3),
+        "success_count": len(completed_runs),
+        "failure_count": len(failed_runs),
+        "failure_modes": failure_modes,
         "runs": runs,
     }
 
@@ -116,20 +140,34 @@ async def run_benchmark(
             desired_outcome=item.get("desired_outcome"),
         )
         run_started = time.perf_counter()
-        result = await orchestrator.analyze(request)
-        runtime_sec = round(time.perf_counter() - run_started, 3)
-        score = evaluate_run(result, heuristic_reviewer)
-
-        runs.append(
-            {
-                "id": item.get("id"),
-                "idea": request.idea,
-                "mode": mode,
-                "runtime_sec": runtime_sec,
-                "run_id": result.run_id,
-                "quality": score,
-            }
-        )
+        try:
+            result = await orchestrator.analyze(request)
+            runtime_sec = round(time.perf_counter() - run_started, 3)
+            score = evaluate_run(result, heuristic_reviewer)
+            runs.append(
+                {
+                    "id": item.get("id"),
+                    "idea": request.idea,
+                    "mode": mode,
+                    "runtime_sec": runtime_sec,
+                    "run_id": result.run_id,
+                    "status": "completed",
+                    "quality": score,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            runtime_sec = round(time.perf_counter() - run_started, 3)
+            runs.append(
+                {
+                    "id": item.get("id"),
+                    "idea": request.idea,
+                    "mode": mode,
+                    "runtime_sec": runtime_sec,
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
 
     total_runtime_sec = round(time.perf_counter() - started, 3)
     return _summarize_report(
@@ -169,6 +207,7 @@ def run_single_pass_baseline(
                 "mode": "single_pass_baseline",
                 "runtime_sec": runtime_sec,
                 "run_id": result.run_id,
+                "status": "completed",
                 "quality": score,
             }
         )
@@ -215,15 +254,27 @@ def compare_reports(base: dict[str, Any], target: dict[str, Any]) -> dict[str, A
     base_quality = float(base.get("average_quality_score", 0.0))
     target_quality = float(target.get("average_quality_score", 0.0))
 
+    def _eligible(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        if item.get("id") is None:
+            return False
+        if item.get("status", "completed") != "completed":
+            return False
+        quality = item.get("quality")
+        if not isinstance(quality, dict):
+            return False
+        return isinstance(quality.get("quality_score"), (int, float))
+
     base_runs = {
         str(item.get("id")): item
         for item in base.get("runs", [])
-        if isinstance(item, dict) and item.get("id") is not None
+        if _eligible(item)
     }
     target_runs = {
         str(item.get("id")): item
         for item in target.get("runs", [])
-        if isinstance(item, dict) and item.get("id") is not None
+        if _eligible(item)
     }
 
     shared_ids = sorted(set(base_runs.keys()) & set(target_runs.keys()))
