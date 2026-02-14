@@ -153,6 +153,33 @@ def test_run_benchmark_continues_on_item_failure(tmp_path) -> None:  # noqa: ANN
     assert failed["error_type"] == "RuntimeError"
 
 
+def test_run_benchmark_includes_domain_metrics_and_rubric_domain(tmp_path) -> None:  # noqa: ANN001
+    dataset = tmp_path / "dataset_domains.jsonl"
+    dataset.write_text(
+        "\n".join(
+            [
+                '{"id":"fin-1","idea":"finance idea","domain":"finance"}',
+                '{"id":"cons-1","idea":"consumer idea","domain":"consumer"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    report = asyncio.run(
+        run_benchmark(
+            orchestrator=MixedOutcomeOrchestrator(),
+            dataset_path=dataset,
+            mode="deep",
+        )
+    )
+    assert "domain_metrics" in report
+    assert report["domain_metrics"]["finance"]["dataset_size"] == 1
+    assert report["domain_metrics"]["consumer"]["dataset_size"] == 1
+    finance_run = next(item for item in report["runs"] if item["id"] == "fin-1")
+    consumer_run = next(item for item in report["runs"] if item["id"] == "cons-1")
+    assert finance_run["quality"]["rubric_domain"] == "finance"
+    assert consumer_run["quality"]["rubric_domain"] == "consumer"
+
+
 def test_compare_reports_ignores_failed_runs() -> None:
     base = {
         "created_at": "2026-02-14T00:00:00Z",
@@ -179,6 +206,32 @@ def test_compare_reports_ignores_failed_runs() -> None:
     diff = compare_reports(base, target)
     assert diff["shared_run_count"] == 1
     assert diff["run_deltas"][0]["id"] == "a"
+
+
+def test_compare_reports_includes_domain_deltas() -> None:
+    base = {
+        "average_runtime_sec": 100.0,
+        "average_quality_score": 0.5,
+        "runs": [],
+        "domain_metrics": {
+            "finance": {"average_quality_score": 0.55, "average_runtime_sec": 90.0, "success_count": 3},
+            "consumer": {"average_quality_score": 0.45, "average_runtime_sec": 110.0, "success_count": 3},
+        },
+    }
+    target = {
+        "average_runtime_sec": 95.0,
+        "average_quality_score": 0.58,
+        "runs": [],
+        "domain_metrics": {
+            "finance": {"average_quality_score": 0.62, "average_runtime_sec": 88.0, "success_count": 3},
+            "consumer": {"average_quality_score": 0.5, "average_runtime_sec": 104.0, "success_count": 3},
+        },
+    }
+    diff = compare_reports(base, target)
+    assert len(diff["domain_deltas"]) == 2
+    finance = next(item for item in diff["domain_deltas"] if item["domain"] == "finance")
+    assert finance["quality_delta"] == 0.07
+    assert finance["runtime_delta_sec"] == -2.0
 
 
 def test_run_duel_benchmark_outputs_comparison_and_gate(tmp_path) -> None:  # noqa: ANN001

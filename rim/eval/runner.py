@@ -38,6 +38,61 @@ def heuristic_reviewer(result: AnalyzeResult) -> tuple[float, float, float]:
     return rigor, novelty, practicality
 
 
+def _normalize_domain(value: Any) -> str:
+    parsed = str(value or "").strip().lower()
+    return parsed if parsed else "unspecified"
+
+
+def _summarize_domain_metrics(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    metrics: dict[str, dict[str, Any]] = {}
+    for item in runs:
+        domain = _normalize_domain(item.get("domain"))
+        status = str(item.get("status") or "unknown").strip().lower()
+        bucket = metrics.setdefault(
+            domain,
+            {
+                "dataset_size": 0,
+                "success_count": 0,
+                "failure_count": 0,
+                "average_runtime_sec": 0.0,
+                "average_quality_score": 0.0,
+                "failure_modes": {},
+                "_runtime_total": 0.0,
+                "_quality_total": 0.0,
+            },
+        )
+        bucket["dataset_size"] += 1
+
+        if status == "completed":
+            quality = item.get("quality")
+            if not isinstance(quality, dict):
+                continue
+            quality_score = quality.get("quality_score")
+            if not isinstance(quality_score, (int, float)):
+                continue
+            runtime = float(item.get("runtime_sec", 0.0))
+            bucket["success_count"] += 1
+            bucket["_runtime_total"] += runtime
+            bucket["_quality_total"] += float(quality_score)
+            continue
+
+        if status in {"failed", "canceled"}:
+            bucket["failure_count"] += 1
+            mode_name = str(item.get("error_type") or status or "unknown")
+            failure_modes = bucket["failure_modes"]
+            failure_modes[mode_name] = failure_modes.get(mode_name, 0) + 1
+
+    for domain, bucket in metrics.items():
+        success_count = int(bucket["success_count"])
+        if success_count > 0:
+            bucket["average_runtime_sec"] = round(bucket["_runtime_total"] / success_count, 3)
+            bucket["average_quality_score"] = round(bucket["_quality_total"] / success_count, 3)
+        bucket.pop("_runtime_total", None)
+        bucket.pop("_quality_total", None)
+        metrics[domain] = bucket
+    return metrics
+
+
 def _summarize_report(
     started_at: str,
     dataset_path: Path,
@@ -70,6 +125,7 @@ def _summarize_report(
             "success_count": 0,
             "failure_count": 0,
             "failure_modes": {},
+            "domain_metrics": {},
             "runs": [],
         }
 
@@ -91,6 +147,7 @@ def _summarize_report(
         "success_count": len(completed_runs),
         "failure_count": len(failed_runs),
         "failure_modes": failure_modes,
+        "domain_metrics": _summarize_domain_metrics(runs),
         "runs": runs,
     }
 
@@ -143,11 +200,12 @@ async def run_benchmark(
         try:
             result = await orchestrator.analyze(request)
             runtime_sec = round(time.perf_counter() - run_started, 3)
-            score = evaluate_run(result, heuristic_reviewer)
+            score = evaluate_run(result, heuristic_reviewer, domain=request.domain)
             runs.append(
                 {
                     "id": item.get("id"),
                     "idea": request.idea,
+                    "domain": request.domain,
                     "mode": mode,
                     "runtime_sec": runtime_sec,
                     "run_id": result.run_id,
@@ -161,6 +219,7 @@ async def run_benchmark(
                 {
                     "id": item.get("id"),
                     "idea": request.idea,
+                    "domain": request.domain,
                     "mode": mode,
                     "runtime_sec": runtime_sec,
                     "status": "failed",
@@ -199,11 +258,13 @@ def run_single_pass_baseline(
             run_id=f"baseline-{item_id}",
         )
         runtime_sec = round(time.perf_counter() - run_started, 3)
-        score = evaluate_run(result, heuristic_reviewer)
+        domain = item.get("domain")
+        score = evaluate_run(result, heuristic_reviewer, domain=domain)
         runs.append(
             {
                 "id": item.get("id"),
                 "idea": result.input_idea,
+                "domain": domain,
                 "mode": "single_pass_baseline",
                 "runtime_sec": runtime_sec,
                 "run_id": result.run_id,
@@ -328,6 +389,30 @@ def compare_reports(base: dict[str, Any], target: dict[str, Any]) -> dict[str, A
             }
         )
 
+    base_domain_metrics = base.get("domain_metrics")
+    target_domain_metrics = target.get("domain_metrics")
+    domain_deltas: list[dict[str, Any]] = []
+    if isinstance(base_domain_metrics, dict) and isinstance(target_domain_metrics, dict):
+        shared_domains = sorted(set(base_domain_metrics.keys()) & set(target_domain_metrics.keys()))
+        for domain in shared_domains:
+            base_bucket = base_domain_metrics.get(domain)
+            target_bucket = target_domain_metrics.get(domain)
+            if not isinstance(base_bucket, dict) or not isinstance(target_bucket, dict):
+                continue
+            base_quality_domain = float(base_bucket.get("average_quality_score", 0.0))
+            target_quality_domain = float(target_bucket.get("average_quality_score", 0.0))
+            base_runtime_domain = float(base_bucket.get("average_runtime_sec", 0.0))
+            target_runtime_domain = float(target_bucket.get("average_runtime_sec", 0.0))
+            domain_deltas.append(
+                {
+                    "domain": domain,
+                    "quality_delta": round(target_quality_domain - base_quality_domain, 4),
+                    "runtime_delta_sec": round(target_runtime_domain - base_runtime_domain, 4),
+                    "base_success_count": int(base_bucket.get("success_count", 0)),
+                    "target_success_count": int(target_bucket.get("success_count", 0)),
+                }
+            )
+
     return {
         "base_created_at": base.get("created_at"),
         "target_created_at": target.get("created_at"),
@@ -338,6 +423,7 @@ def compare_reports(base: dict[str, Any], target: dict[str, Any]) -> dict[str, A
         "average_quality_delta": round(target_quality - base_quality, 4),
         "average_runtime_delta_sec": round(target_runtime - base_runtime, 4),
         "shared_run_count": len(shared_ids),
+        "domain_deltas": domain_deltas,
         "run_deltas": run_deltas,
     }
 

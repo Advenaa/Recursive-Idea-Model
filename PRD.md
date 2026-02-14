@@ -252,7 +252,7 @@ Each run must return JSON with this minimum schema:
 
 ## 19) Post-MVP Roadmap (v0.2)
 
-- Replace heuristic scoring with a stronger domain-weighted rubric
+- Replace heuristic scoring with a stronger domain-weighted rubric (done on February 14, 2026)
 - Finalize a canonical 20-idea benchmark pack and blind-review process
 - Add explicit run cancel/retry controls in API and CLI (done on February 14, 2026)
 - Add richer evaluation analytics (domain-level trend and regression dashboards)
@@ -271,6 +271,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Deep mode default across API and CLI.
 - Persistent run artifacts, memory retrieval filters, and feedback-driven memory rescoring.
 - Explicit run controls: cancel/retry in API (`/runs/{id}/cancel`, `/runs/{id}/retry`) and CLI (`rim run cancel`, `rim run retry`).
+- Domain-weighted quality rubric and domain-level benchmark analytics (`domain_metrics`, `domain_deltas`).
 - Provider orchestration guardrails (fallbacks, retries, determinism controls, and run budgets).
 - Benchmark/eval workflow with baseline, compare, and gate.
 

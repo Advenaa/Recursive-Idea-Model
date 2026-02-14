@@ -36,6 +36,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
 - SQLite persistence + memory context reuse (`rim/storage/`)
 - Benchmark runner + dataset (`rim/eval/`)
+- Domain-weighted benchmark scoring + domain trend deltas (`rim/eval/runner.py`)
 - Deterministic single-pass baseline + regression gate (`rim eval baseline`, `rim eval gate`)
 - Local CLI entrypoint (`rim/cli.py`)
 
