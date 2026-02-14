@@ -19,6 +19,25 @@ _ROLE_RULES: list[tuple[str, list[str], str, str]] = [
     ("ux", ["ux", "usability", "adoption", "onboarding", "retention"], "critic_ux", "ux"),
 ]
 
+_ROLE_TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
+    "security": {
+        "tools": ["threat_model", "policy_checklist", "abuse_case_review"],
+        "routing_policy": "prioritize_high_severity_and_compliance_constraints",
+    },
+    "finance": {
+        "tools": ["unit_economics_model", "sensitivity_analysis", "pricing_stress_test"],
+        "routing_policy": "prioritize_margin_and_budget_constraints",
+    },
+    "scalability": {
+        "tools": ["capacity_profile", "latency_budget", "failure_mode_envelope"],
+        "routing_policy": "prioritize_runtime_and_reliability_constraints",
+    },
+    "ux": {
+        "tools": ["journey_map", "onboarding_friction_scan", "retention_hypothesis_grid"],
+        "routing_policy": "prioritize_adoption_and_clarity_constraints",
+    },
+}
+
 _DOMAIN_ROLE_HINTS = {
     "finance": "finance",
     "fintech": "finance",
@@ -136,6 +155,7 @@ def build_spawn_plan(
                 "score": round(score, 3),
                 "matched_keywords": matched_keywords[:5],
                 "evidence": evidence,
+                "tool_contract": _ROLE_TOOL_CONTRACTS.get(role_name, {"tools": [], "routing_policy": "generic"}),
             }
         )
 

@@ -287,7 +287,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Verification layer:
   deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, and baseline advanced adapters (`solver:`, `simulate:`, `data:`) are implemented, including pluggable external adapter command hooks; formal theorem/constraint tooling and production external integrations are still missing.
 - Specialization layer:
-  domain-specialist spawning and scored heuristic role-selection are implemented (with thresholded specialist budgets and rationale metadata), but no learned multi-role agent factory with tool-routing policies.
+  domain-specialist spawning and scored heuristic role-selection are implemented (with thresholded specialist budgets, rationale metadata, and heuristic tool-routing contracts), but no learned multi-role agent factory with adaptive tool-routing policies.
 
 ### 20.3 Missing / Slacking Against SOTA Paper
 

@@ -47,6 +47,9 @@ def test_spawn_plan_includes_scoring_and_match_metadata() -> None:
     assert "score" in first
     assert "matched_keywords" in first
     assert "evidence" in first
+    assert "tool_contract" in first
+    assert "tools" in first["tool_contract"]
+    assert "routing_policy" in first["tool_contract"]
 
 
 def test_spawn_plan_honors_role_score_threshold(monkeypatch) -> None:  # noqa: ANN001
