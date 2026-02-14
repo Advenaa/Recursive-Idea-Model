@@ -61,3 +61,21 @@ def test_spawn_plan_honors_role_score_threshold(monkeypatch) -> None:  # noqa: A
         memory_context=[],
     )
     assert payload["selected_count"] == 0
+
+
+def test_spawn_plan_can_generate_dynamic_specialist_roles(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("RIM_ENABLE_DYNAMIC_SPECIALISTS", "1")
+    monkeypatch.setenv("RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS", "2")
+    payload = build_spawn_plan(
+        mode="deep",
+        domain="bioinformatics",
+        constraints=[
+            "Need genomics workflow controls and lineage tracking",
+            "Evaluate proteomics risk model",
+        ],
+        memory_context=[],
+    )
+    roles = [item["role"] for item in payload["extra_critics"]]
+    assert any(role.startswith("dynamic_") for role in roles)
+    dynamic_item = next(item for item in payload["extra_critics"] if item["role"].startswith("dynamic_"))
+    assert dynamic_item["tool_contract"]["routing_policy"] == "prioritize_domain_specific_signals"

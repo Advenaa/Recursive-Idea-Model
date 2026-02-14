@@ -6,6 +6,23 @@ from collections import Counter
 from typing import Any
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
+_DYNAMIC_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{3,32}$")
+_DYNAMIC_STOPWORDS = {
+    "need",
+    "must",
+    "should",
+    "with",
+    "from",
+    "into",
+    "that",
+    "this",
+    "have",
+    "will",
+    "could",
+    "would",
+    "across",
+    "general",
+}
 
 _ROLE_RULES: list[tuple[str, list[str], str, str]] = [
     ("security", ["security", "threat", "privacy", "auth", "compliance"], "critic_security", "security"),
@@ -118,6 +135,47 @@ def _role_score(
     }
 
 
+def _extract_dynamic_tokens(
+    *,
+    domain_counts: Counter[str],
+    constraint_counts: Counter[str],
+    memory_counts: Counter[str],
+    known_keywords: set[str],
+    max_tokens: int,
+) -> list[tuple[str, float, dict[str, int]]]:
+    combined: Counter[str] = Counter()
+    combined.update(domain_counts)
+    combined.update(constraint_counts)
+    combined.update(memory_counts)
+    candidates: list[tuple[str, float, dict[str, int]]] = []
+    for token, count in combined.items():
+        if token in known_keywords:
+            continue
+        if token in _DYNAMIC_STOPWORDS:
+            continue
+        if not _DYNAMIC_TOKEN_RE.match(token):
+            continue
+        domain_hits = int(domain_counts.get(token, 0))
+        constraint_hits = int(constraint_counts.get(token, 0))
+        memory_hits = int(memory_counts.get(token, 0))
+        score = (2.0 * domain_hits) + (1.0 * constraint_hits) + (0.7 * memory_hits) + (0.1 * count)
+        if score <= 0.0:
+            continue
+        candidates.append(
+            (
+                token,
+                round(float(score), 3),
+                {
+                    "domain_hits": domain_hits,
+                    "constraint_hits": constraint_hits,
+                    "memory_hits": memory_hits,
+                },
+            )
+        )
+    candidates.sort(key=lambda item: (item[1], item[0]), reverse=True)
+    return candidates[: max(0, int(max_tokens))]
+
+
 def build_spawn_plan(
     *,
     mode: str,
@@ -135,7 +193,21 @@ def build_spawn_plan(
         lower=0.0,
         upper=20.0,
     )
+    enable_dynamic_specialists = str(
+        os.getenv("RIM_ENABLE_DYNAMIC_SPECIALISTS", "1")
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    max_dynamic_specialists = _parse_int_env(
+        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS",
+        2,
+        lower=0,
+        upper=6,
+    )
     scored_candidates: list[dict[str, Any]] = []
+    known_keywords = {
+        keyword
+        for _, keywords, _, _ in _ROLE_RULES
+        for keyword in keywords
+    }
     for role_name, keywords, stage, critic_type in _ROLE_RULES:
         score, matched_keywords, evidence = _role_score(
             role_name=role_name,
@@ -158,6 +230,33 @@ def build_spawn_plan(
                 "tool_contract": _ROLE_TOOL_CONTRACTS.get(role_name, {"tools": [], "routing_policy": "generic"}),
             }
         )
+
+    if enable_dynamic_specialists:
+        dynamic_tokens = _extract_dynamic_tokens(
+            domain_counts=domain_counts,
+            constraint_counts=constraint_counts,
+            memory_counts=memory_counts,
+            known_keywords=known_keywords,
+            max_tokens=max_dynamic_specialists,
+        )
+        for token, score, evidence in dynamic_tokens:
+            if score < min_role_score:
+                continue
+            scored_candidates.append(
+                {
+                    "role": f"dynamic_{token}",
+                    "stage": f"critic_dynamic_{token}",
+                    "critic_type": f"dynamic_{token}",
+                    "score": score,
+                    "matched_keywords": [token],
+                    "evidence": evidence,
+                    "tool_contract": {
+                        "tools": [f"context_probe:{token}", "evidence_scan", "counterexample_search"],
+                        "routing_policy": "prioritize_domain_specific_signals",
+                    },
+                    "dynamic": True,
+                }
+            )
 
     # Deep mode can carry more specialists, fast mode keeps one maximum.
     mode_normalized = str(mode).strip().lower()
@@ -182,5 +281,6 @@ def build_spawn_plan(
         "candidate_count": len(scored_candidates),
         "min_role_score": min_role_score,
         "domain_hint_role": hint_role,
+        "dynamic_enabled": enable_dynamic_specialists,
         "mode": str(mode),
     }

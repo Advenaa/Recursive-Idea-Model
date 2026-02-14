@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + offline policy-training increments): `99` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + dynamic specialist increments): `100` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -291,7 +291,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 
 ### 20.3 Missing / Slacking Against SOTA Paper
 
-- Dynamic agent spawning and specialization (AgentSpawner-style role/tool creation at runtime).
+- Learned dynamic agent spawning and specialization (AgentSpawner-style policy-trained role/tool creation at runtime beyond current heuristic dynamic roles).
 - Full neuro-symbolic verification loops (formal theorem/constraint tooling, simulation, and external data-backed execution).
 - Long-horizon memory quality controls and adaptive fold policy optimization.
 - RL-based orchestration training (PARL/ARPO/AEPO-style policy optimization and credit assignment).
