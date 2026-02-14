@@ -30,3 +30,31 @@ def test_spawn_plan_limits_specialists_in_fast_mode() -> None:
         memory_context=[],
     )
     assert payload["selected_count"] <= 1
+
+
+def test_spawn_plan_includes_scoring_and_match_metadata() -> None:
+    payload = build_spawn_plan(
+        mode="deep",
+        domain="finance",
+        constraints=[
+            "Need better pricing and margin controls",
+            "Must satisfy security and compliance",
+        ],
+        memory_context=["Recent outage was caused by latency spikes."],
+    )
+    assert payload["selected_count"] >= 1
+    first = payload["extra_critics"][0]
+    assert "score" in first
+    assert "matched_keywords" in first
+    assert "evidence" in first
+
+
+def test_spawn_plan_honors_role_score_threshold(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("RIM_SPAWN_MIN_ROLE_SCORE", "10")
+    payload = build_spawn_plan(
+        mode="deep",
+        domain="general",
+        constraints=["light requirement"],
+        memory_context=[],
+    )
+    assert payload["selected_count"] == 0
