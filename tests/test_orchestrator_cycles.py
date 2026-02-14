@@ -142,6 +142,8 @@ def test_orchestrator_recurse_when_depth_allocator_signals_continue(
     ]
     assert len(fold_logs) == 1
     assert fold_logs[0].meta["cycle"] == 1
+    assert fold_logs[0].meta["fold_version"] == "v2"
+    assert "degradation_detected" in fold_logs[0].meta
 
 
 def test_orchestrator_defaults_to_single_cycle(

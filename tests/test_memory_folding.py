@@ -36,6 +36,9 @@ def test_fold_cycle_memory_produces_tripartite_sections() -> None:
     assert payload["tool"]
     assert len(payload["folded_context"]) <= 10
     assert any("Cycle 2 summary" in entry for entry in payload["folded_context"])
+    assert payload["fold_version"] == "v2"
+    assert "quality" in payload
+    assert "novelty_ratio" in payload["quality"]
 
 
 def test_fold_to_memory_entries_maps_sections_to_entry_types() -> None:
@@ -50,3 +53,29 @@ def test_fold_to_memory_entries_maps_sections_to_entry_types() -> None:
     assert "working" in types
     assert "tool" in types
     assert all(item["domain"] == "finance" for item in entries)
+
+
+def test_fold_cycle_memory_flags_degradation_when_context_is_stale() -> None:
+    synthesis = {
+        "synthesized_idea": "Same idea",
+        "changes_summary": [],
+        "residual_risks": [],
+    }
+    prior_context = [
+        "Cycle 2 summary: Same idea",
+        "Cycle 2 open risk: none",
+        "Cycle 2 critic signal: logic x1",
+        "Cycle 2 summary: Same idea",
+    ]
+    payload = fold_cycle_memory(
+        cycle=2,
+        prior_context=prior_context,
+        synthesis=synthesis,
+        findings=[_finding("logic", "Issue A")],
+        max_entries=6,
+        novelty_floor=0.8,
+        max_duplicate_ratio=0.1,
+    )
+    quality = payload["quality"]
+    assert quality["degradation_detected"] is True
+    assert quality["duplicate_ratio"] >= 0.1

@@ -17,6 +17,8 @@ def fold_cycle_memory(
     synthesis: dict[str, object],
     findings: list[CriticFinding],
     max_entries: int = 12,
+    novelty_floor: float = 0.35,
+    max_duplicate_ratio: float = 0.5,
 ) -> dict[str, object]:
     synthesized_idea = _truncate_words(str(synthesis.get("synthesized_idea") or ""), 24)
     changes = [
@@ -52,11 +54,12 @@ def fold_cycle_memory(
         tool.append(f"Cycle {cycle} critic signal: none")
 
     folded_context: list[str] = []
+    new_entries = [*episodic, *working, *tool]
     seen: set[str] = set()
+    duplicate_skips = 0
+    kept_new_entries = 0
     for entry in [
-        *episodic,
-        *working,
-        *tool,
+        *new_entries,
         *list(prior_context or []),
     ]:
         text = str(entry).strip()
@@ -64,17 +67,51 @@ def fold_cycle_memory(
             continue
         key = text.lower()
         if key in seen:
+            duplicate_skips += 1
             continue
         seen.add(key)
         folded_context.append(text)
+        if text in new_entries:
+            kept_new_entries += 1
         if len(folded_context) >= max(4, int(max_entries)):
             break
 
+    normalized_novelty_floor = max(0.0, min(1.0, float(novelty_floor)))
+    normalized_duplicate_ratio = max(0.0, min(1.0, float(max_duplicate_ratio)))
+    total_folded = len(folded_context)
+    novelty_ratio = (
+        float(kept_new_entries) / float(total_folded)
+        if total_folded > 0
+        else 0.0
+    )
+    duplicate_ratio = (
+        float(duplicate_skips) / float(total_folded + duplicate_skips)
+        if (total_folded + duplicate_skips) > 0
+        else 0.0
+    )
+    degradation_reasons: list[str] = []
+    if novelty_ratio < normalized_novelty_floor:
+        degradation_reasons.append("low_novelty")
+    if duplicate_ratio > normalized_duplicate_ratio:
+        degradation_reasons.append("high_duplicate_ratio")
+    degradation_detected = bool(degradation_reasons)
+
     return {
+        "fold_version": "v2",
         "episodic": episodic,
         "working": working,
         "tool": tool,
         "folded_context": folded_context,
+        "quality": {
+            "novelty_ratio": round(novelty_ratio, 4),
+            "duplicate_ratio": round(duplicate_ratio, 4),
+            "kept_new_entries": kept_new_entries,
+            "duplicate_skips": duplicate_skips,
+            "degradation_detected": degradation_detected,
+            "degradation_reasons": degradation_reasons,
+            "novelty_floor": normalized_novelty_floor,
+            "max_duplicate_ratio": normalized_duplicate_ratio,
+        },
     }
 
 

@@ -335,6 +335,18 @@ class RimOrchestrator:
                 lower=6,
                 upper=40,
             )
+            memory_fold_novelty_floor = _parse_float_env(
+                "RIM_MEMORY_FOLD_NOVELTY_FLOOR",
+                0.35,
+                lower=0.0,
+                upper=1.0,
+            )
+            memory_fold_max_duplicate_ratio = _parse_float_env(
+                "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO",
+                0.5,
+                lower=0.0,
+                upper=1.0,
+            )
             enable_arbitration = _parse_bool_env(
                 "RIM_ENABLE_DISAGREEMENT_ARBITRATION",
                 request.mode == "deep",
@@ -702,6 +714,8 @@ class RimOrchestrator:
                         synthesis=synthesis,
                         findings=findings,
                         max_entries=memory_fold_max_entries,
+                        novelty_floor=memory_fold_novelty_floor,
+                        max_duplicate_ratio=memory_fold_max_duplicate_ratio,
                     )
                     working_memory_context = list(fold_payload["folded_context"])
                     cycle_fold_entries = fold_to_memory_entries(
@@ -709,17 +723,27 @@ class RimOrchestrator:
                         domain=request.domain,
                     )
                     folded_memory_entries.extend(cycle_fold_entries)
+                    fold_quality = fold_payload.get("quality", {})
                     self.repository.log_stage(
                         run_id=run_id,
                         stage="memory_fold",
                         status="completed",
                         meta={
                             "cycle": cycle,
+                            "fold_version": fold_payload.get("fold_version", "v1"),
                             "folded_context_entries": len(working_memory_context),
                             "episodic_entries": len(list(fold_payload["episodic"])),
                             "working_entries": len(list(fold_payload["working"])),
                             "tool_entries": len(list(fold_payload["tool"])),
                             "persisted_entries": len(cycle_fold_entries),
+                            "degradation_detected": bool(
+                                fold_quality.get("degradation_detected", False)
+                            ),
+                            "degradation_reasons": list(
+                                fold_quality.get("degradation_reasons") or []
+                            )[:4],
+                            "novelty_ratio": fold_quality.get("novelty_ratio", 0.0),
+                            "duplicate_ratio": fold_quality.get("duplicate_ratio", 0.0),
                         },
                     )
                 else:
