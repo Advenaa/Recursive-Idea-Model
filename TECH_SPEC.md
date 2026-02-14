@@ -369,19 +369,20 @@ Additional eval commands:
 
 1. `intake`
 2. `memory_read`
-3. `decompose` (cycle N)
-4. `challenge_parallel` (cycle N)
-5. `challenge_reconciliation` (consensus/disagreement aggregation)
-6. `challenge_arbitration` (optional disagreement resolution calls)
-7. `synthesis` (cycle N)
-8. `verification` (deterministic constraint/risk coverage checks)
-9. `verification_executable` (safe expression checks for prefixed executable constraints)
-10. `depth_allocator` (decide recurse or stop)
-11. `memory_fold` (when recursing; compact episodic/working/tool summaries)
-12. Repeat steps 3-11 while recursion decision is true and cycle budget remains
-13. `memory_write`
-14. `provider_budget`
-15. `finalize`
+3. `specialization_spawn` (build per-run specialist critic plan)
+4. `decompose` (cycle N)
+5. `challenge_parallel` (cycle N)
+6. `challenge_reconciliation` (consensus/disagreement aggregation)
+7. `challenge_arbitration` (optional disagreement resolution calls)
+8. `synthesis` (cycle N)
+9. `verification` (deterministic constraint/risk coverage checks)
+10. `verification_executable` (safe expression checks for prefixed executable constraints)
+11. `depth_allocator` (decide recurse or stop)
+12. `memory_fold` (when recursing; compact episodic/working/tool summaries)
+13. Repeat steps 4-12 while recursion decision is true and cycle budget remains
+14. `memory_write`
+15. `provider_budget`
+16. `finalize`
 
 ### 9.2 Parallel Challenge
 
@@ -406,6 +407,13 @@ Additional eval commands:
    - `finding_count`
    - `high_finding_count`
    - `critical_finding_count`
+
+### 9.4 Specialization Spawn
+
+1. `specialization_spawn` builds a per-run specialist critic plan from domain, constraints, and recent memory context.
+2. The spawner selects extra critic roles via keyword-to-role rules (security, finance, scalability, UX).
+3. Deep mode can include up to three extra specialists; fast mode caps at one.
+4. Selected specialists are appended to the challenge layer as additional critic stages.
 
 ## 10) Prompt and Schema Discipline
 

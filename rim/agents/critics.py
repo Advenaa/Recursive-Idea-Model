@@ -111,12 +111,26 @@ async def run_critics(
     nodes: list[DecompositionNode],
     settings: ModeSettings,
     domain: str | None = None,
+    extra_critics: list[tuple[str, str]] | None = None,
 ) -> list[CriticFinding]:
-    critics = list(DEEP_CRITICS if settings.mode == "deep" else FAST_CRITICS)
+    base_critics = list(DEEP_CRITICS if settings.mode == "deep" else FAST_CRITICS)
+    cleaned_extra_critics: list[tuple[str, str]] = []
+    for item in list(extra_critics or []):
+        if not isinstance(item, tuple) or len(item) != 2:
+            continue
+        stage_name, critic_type = item
+        stage_text = str(stage_name).strip()
+        critic_text = str(critic_type).strip()
+        if not stage_text or not critic_text:
+            continue
+        pair = (stage_text, critic_text)
+        if pair not in cleaned_extra_critics and pair not in base_critics:
+            cleaned_extra_critics.append(pair)
     domain_stage = _domain_specialist_stage(domain)
-    if domain_stage is not None and _domain_critic_enabled():
-        critics.append(domain_stage)
-    selected_critics = list(critics[: settings.critics_per_node])
+    selected_critics = list(base_critics[: settings.critics_per_node])
+    for pair in cleaned_extra_critics:
+        if pair not in selected_critics:
+            selected_critics.append(pair)
     if domain_stage is not None and _domain_critic_enabled() and domain_stage not in selected_critics:
         selected_critics.append(domain_stage)
     max_parallel = int(os.getenv("RIM_MAX_PARALLEL_CRITICS", "6"))

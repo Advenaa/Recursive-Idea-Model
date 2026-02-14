@@ -464,3 +464,70 @@ def test_orchestrator_runs_python_exec_checks_when_enabled(
     assert len(exec_logs) == 1
     assert exec_logs[0].meta["failed_checks"] == 0
     assert exec_logs[0].meta["python_exec_enabled"] is True
+
+
+def test_orchestrator_logs_specialization_spawn_plan(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    captured_extra: list[tuple[str, str]] = []
+
+    async def fake_decompose(*args, **kwargs):  # noqa: ANN001, ANN202
+        root = DecompositionNode(
+            depth=0,
+            component_text="Idea G",
+            node_type="claim",
+            confidence=0.4,
+        )
+        return [root], "codex", {"stop_reason": "max_depth"}
+
+    async def fake_critics(*args, **kwargs):  # noqa: ANN001, ANN202
+        captured_extra.extend(list(kwargs.get("extra_critics") or []))
+        nodes = kwargs.get("nodes") or args[1]
+        return [
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="logic",
+                issue="base issue",
+                severity="medium",
+                confidence=0.7,
+                suggested_fix="fix",
+                provider="codex",
+            )
+        ]
+
+    async def fake_synthesize(*args, **kwargs):  # noqa: ANN001, ANN202
+        return (
+            {
+                "synthesized_idea": "Idea G refined",
+                "changes_summary": ["change"],
+                "residual_risks": [],
+                "next_experiments": ["test"],
+                "confidence_score": 0.75,
+            },
+            ["claude"],
+        )
+
+    monkeypatch.setattr(orchestrator_module, "decompose_idea", fake_decompose)
+    monkeypatch.setattr(orchestrator_module, "run_critics", fake_critics)
+    monkeypatch.setattr(orchestrator_module, "synthesize_idea", fake_synthesize)
+    monkeypatch.setenv("RIM_MAX_ANALYSIS_CYCLES", "1")
+    monkeypatch.setenv("RIM_ENABLE_VERIFICATION", "0")
+    monkeypatch.setenv("RIM_ENABLE_EXECUTABLE_VERIFICATION", "0")
+
+    repo = RunRepository(db_path=tmp_path / "rim_orchestrator_spawn_plan.db")
+    orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
+    request = AnalyzeRequest(
+        idea="Idea G",
+        mode="deep",
+        constraints=["Need security and low latency"],
+    )
+    run_id = orchestrator.create_run(request, status="running")
+
+    _result = asyncio.run(orchestrator.execute_run(run_id, request))
+    assert any(stage in {"critic_security", "critic_scalability"} for stage, _ in captured_extra)
+
+    logs = orchestrator.get_run_logs(run_id).logs
+    spawn_logs = [log for log in logs if log.stage == "specialization_spawn"]
+    assert len(spawn_logs) == 1
+    assert spawn_logs[0].meta["selected_count"] >= 1

@@ -10,6 +10,7 @@ from rim.agents.decomposer import decompose_idea
 from rim.agents.arbitrator import run_arbitration
 from rim.agents.executable_verifier import run_executable_verification
 from rim.agents.reconciliation import reconcile_findings
+from rim.agents.spawner import build_spawn_plan
 from rim.agents.synthesizer import synthesize_idea
 from rim.agents.verification import verify_synthesis
 from rim.core.depth_allocator import decide_next_cycle, severity_counts
@@ -356,6 +357,25 @@ class RimOrchestrator:
                     "min_severity": memory_min_severity,
                 },
             )
+            spawn_plan = build_spawn_plan(
+                mode=request.mode,
+                domain=request.domain,
+                constraints=request.constraints,
+                memory_context=memory_context,
+            )
+            spawned_extra_critics = [
+                (str(item["stage"]), str(item["critic_type"]))
+                for item in list(spawn_plan.get("extra_critics") or [])
+                if isinstance(item, dict)
+                and str(item.get("stage") or "").strip()
+                and str(item.get("critic_type") or "").strip()
+            ]
+            self.repository.log_stage(
+                run_id=run_id,
+                stage="specialization_spawn",
+                status="completed",
+                meta=spawn_plan,
+            )
             current_idea = request.idea
             working_memory_context = list(memory_context)
             previous_confidence: float | None = None
@@ -394,6 +414,7 @@ class RimOrchestrator:
                     nodes,
                     settings,
                     domain=request.domain,
+                    extra_critics=spawned_extra_critics,
                 )
                 self.repository.log_stage(
                     run_id=run_id,

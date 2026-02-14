@@ -72,3 +72,25 @@ def test_domain_specialist_critic_disabled_by_env(monkeypatch) -> None:  # noqa:
     )
     assert len(findings) == settings.critics_per_node
     assert all(stage != "critic_domain_fintech_payments" for stage in router.stages)
+
+
+def test_extra_critics_are_included() -> None:
+    router = CaptureRouter()
+    settings = get_mode_settings("fast")
+    node = DecompositionNode(
+        depth=0,
+        component_text="Improve onboarding",
+        node_type="claim",
+        confidence=0.5,
+    )
+    findings = asyncio.run(
+        run_critics(
+            router=router,  # type: ignore[arg-type]
+            nodes=[node],
+            settings=settings,
+            domain=None,
+            extra_critics=[("critic_ux", "ux")],
+        )
+    )
+    assert any(stage == "critic_ux" for stage in router.stages)
+    assert any(finding.critic_type == "ux" for finding in findings)
