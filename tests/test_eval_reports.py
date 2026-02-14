@@ -15,6 +15,7 @@ from rim.eval.runner import (
     run_single_pass_baseline,
     save_blind_review_packet,
     save_report,
+    train_depth_policy,
 )
 
 
@@ -363,3 +364,32 @@ def test_calibration_env_exports_formats_env_lines() -> None:
     assert "export RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE=0.812" in exports
     assert "export RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS=1" in exports
     assert "export RIM_MAX_ANALYSIS_CYCLES=2" in exports
+
+
+def test_train_depth_policy_aggregates_report_calibrations() -> None:
+    reports = [
+        {
+            "created_at": "2026-02-14T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.52,
+            "average_runtime_sec": 65.0,
+            "failure_count": 1,
+        },
+        {
+            "created_at": "2026-02-15T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.68,
+            "average_runtime_sec": 48.0,
+            "failure_count": 0,
+        },
+    ]
+    payload = train_depth_policy(
+        reports,
+        target_quality=0.7,
+        target_runtime_sec=60.0,
+    )
+    assert payload["report_count"] == 2
+    env = payload["policy_env"]
+    assert "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE" in env
+    assert "RIM_MAX_ANALYSIS_CYCLES" in env
+    assert payload["recommended_exports"]

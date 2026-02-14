@@ -654,3 +654,122 @@ def calibration_env_exports(calibration: dict[str, Any]) -> list[str]:
         else:
             lines.append(f"export {key}={value}")
     return lines
+
+
+def train_depth_policy(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    valid_reports: list[dict[str, Any]] = []
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        if int(report.get("dataset_size", 0)) <= 0:
+            continue
+        valid_reports.append(report)
+
+    if not valid_reports:
+        empty_policy = {
+            "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": 0.78,
+            "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": 2,
+            "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": 1,
+            "RIM_MAX_ANALYSIS_CYCLES": 1,
+        }
+        return {
+            "report_count": 0,
+            "policy_env": empty_policy,
+            "rationale": ["No valid reports were available; returning default policy."],
+        }
+
+    weighted: dict[str, float] = {
+        "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": 0.0,
+        "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": 0.0,
+        "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": 0.0,
+        "RIM_MAX_ANALYSIS_CYCLES": 0.0,
+    }
+    total_weight = 0.0
+    quality_sum = 0.0
+    runtime_sum = 0.0
+    failure_sum = 0.0
+    samples: list[dict[str, Any]] = []
+    for report in valid_reports:
+        calibration = calibrate_depth_allocator(
+            report,
+            target_quality=target_quality,
+            target_runtime_sec=target_runtime_sec,
+        )
+        env = calibration["recommended_env"]
+        report_quality = float(report.get("average_quality_score", 0.0))
+        report_failure = (
+            float(report.get("failure_count", 0)) / max(1, int(report.get("dataset_size", 1)))
+        )
+        weight = max(0.1, report_quality + 0.15 - (0.25 * report_failure))
+        total_weight += weight
+        quality_sum += report_quality
+        runtime_sum += float(report.get("average_runtime_sec", 0.0))
+        failure_sum += report_failure
+        for key in weighted:
+            weighted[key] += float(env[key]) * weight
+        samples.append(
+            {
+                "created_at": report.get("created_at"),
+                "mode": report.get("mode"),
+                "weight": round(weight, 4),
+                "recommended_env": env,
+            }
+        )
+
+    if total_weight <= 0:
+        total_weight = float(len(valid_reports))
+    policy_env = {
+        "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": round(
+            _clamp_float(weighted["RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE"] / total_weight, 0.65, 0.93),
+            3,
+        ),
+        "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": _clamp_int(
+            int(round(weighted["RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS"] / total_weight)),
+            0,
+            4,
+        ),
+        "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": _clamp_int(
+            int(round(weighted["RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS"] / total_weight)),
+            0,
+            3,
+        ),
+        "RIM_MAX_ANALYSIS_CYCLES": _clamp_int(
+            int(round(weighted["RIM_MAX_ANALYSIS_CYCLES"] / total_weight)),
+            1,
+            4,
+        ),
+    }
+    avg_quality = quality_sum / len(valid_reports)
+    avg_runtime = runtime_sum / len(valid_reports)
+    avg_failure = failure_sum / len(valid_reports)
+    rationale = [
+        "Policy aggregates per-report calibration recommendations using quality-weighted averaging.",
+    ]
+    if avg_quality < target_quality:
+        rationale.append("Average quality is below target, so policy leans deeper.")
+    else:
+        rationale.append("Average quality meets target, so policy remains balanced.")
+    if target_runtime_sec is not None and target_runtime_sec > 0 and avg_runtime > target_runtime_sec:
+        rationale.append("Average runtime exceeds target, so depth recommendations are moderated.")
+    if avg_failure > 0.2:
+        rationale.append("Failure rate is elevated; depth expansion is dampened for stability.")
+
+    return {
+        "report_count": len(valid_reports),
+        "policy_env": policy_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": policy_env}),
+        "summary": {
+            "average_quality_score": round(avg_quality, 4),
+            "average_runtime_sec": round(avg_runtime, 4),
+            "average_failure_rate": round(avg_failure, 4),
+            "target_quality": target_quality,
+            "target_runtime_sec": target_runtime_sec,
+        },
+        "rationale": rationale,
+        "samples": samples[:20],
+    }

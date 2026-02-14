@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + specialist arbitration increments): `98` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + offline policy-training increments): `99` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -281,7 +281,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Learning layer:
   persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version and degradation telemetry, but no adaptive strategy learning/meta-model for decomposition/challenge/synthesis policy updates.
 - Orchestration depth/breadth policy:
-  recursive cycle controller and heuristic DepthAllocator exist, but there is no learned depth-vs-breadth policy training yet.
+  recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration (`rim eval calibrate`, `rim eval train-policy`) available, but there is no learned depth-vs-breadth policy training yet.
 - Challenge reconciliation:
   consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, and specialist follow-up arbitration loops are implemented; learned specialist arbitration policy is still missing.
 - Verification layer:
@@ -303,7 +303,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 3. P1: add specialization layer with dynamic role/tool selection contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
 5. P2: upgrade memory to episodic/working/tool stores and implement folding triggers.
-6. P3: add offline orchestration training pipeline for policy learning and credit assignment.
+6. P3: evolve current offline heuristic policy training (`rim eval train-policy`) to learned policy optimization and credit assignment.
 
 ### 20.5 Delivery Stages for Paper Parity
 

@@ -411,6 +411,7 @@ Additional eval commands:
 6. `rim eval blindpack --report <report.json> --limit 20 --save blind_review.json` to generate anonymized review packets.
 7. `rim eval calibrate --report <report.json> --target-quality 0.65 --target-runtime-sec 60` to recommend depth-allocator env settings from benchmark signals.
 8. `rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-runtime-sec 60` to run benchmark + calibration in one step.
+9. `rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate multiple reports into a depth-policy recommendation.
 
 ## 9) Orchestration Logic
 

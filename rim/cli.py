@@ -23,6 +23,7 @@ from rim.eval.runner import (
     run_single_pass_baseline,
     save_blind_review_packet,
     save_report,
+    train_depth_policy,
 )
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
@@ -353,6 +354,36 @@ def _cmd_eval_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_train_policy_reports(args: argparse.Namespace) -> list[Path]:
+    if args.reports:
+        values = [item.strip() for item in str(args.reports).split(",") if item.strip()]
+        return [Path(item) for item in values]
+    reports_dir = Path(args.reports_dir) if args.reports_dir else DEFAULT_REPORTS_DIR
+    reports = list_reports(reports_dir)
+    if not reports:
+        raise ValueError("No saved reports available for policy training.")
+    return reports
+
+
+def _cmd_eval_train_policy(args: argparse.Namespace) -> int:
+    report_paths = _resolve_train_policy_reports(args)
+    reports = [load_report(path) for path in report_paths]
+    policy = train_depth_policy(
+        reports,
+        target_quality=args.target_quality,
+        target_runtime_sec=args.target_runtime_sec,
+    )
+    payload = {
+        "report_count": len(report_paths),
+        "report_paths": [str(path) for path in report_paths],
+        "policy": policy,
+    }
+    if args.save:
+        Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 async def _cmd_eval_calibrate_loop(args: argparse.Namespace) -> int:
     orchestrator = _build_orchestrator()
     dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
@@ -485,6 +516,15 @@ def build_parser() -> argparse.ArgumentParser:
     eval_calibrate_loop.add_argument("--target-runtime-sec", type=float)
     eval_calibrate_loop.add_argument("--save")
     eval_calibrate_loop.add_argument("--save-report")
+    eval_train_policy = eval_sub.add_parser(
+        "train-policy",
+        help="Train an aggregated depth policy from multiple benchmark reports",
+    )
+    eval_train_policy.add_argument("--reports", help="comma-separated report paths")
+    eval_train_policy.add_argument("--reports-dir")
+    eval_train_policy.add_argument("--target-quality", type=float, default=0.65)
+    eval_train_policy.add_argument("--target-runtime-sec", type=float)
+    eval_train_policy.add_argument("--save")
 
     sub.add_parser("health", help="Healthcheck DB and providers")
     return parser
@@ -525,6 +565,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_calibrate(args))
     if args.command == "eval" and args.eval_command == "calibrate-loop":
         raise SystemExit(asyncio.run(_cmd_eval_calibrate_loop(args)))
+    if args.command == "eval" and args.eval_command == "train-policy":
+        raise SystemExit(_cmd_eval_train_policy(args))
     if args.command == "health":
         raise SystemExit(asyncio.run(_cmd_health()))
     raise SystemExit(1)
