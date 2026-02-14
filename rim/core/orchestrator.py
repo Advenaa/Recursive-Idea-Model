@@ -276,6 +276,18 @@ class RimOrchestrator:
                 lower=0.0,
                 upper=1.0,
             )
+            reconcile_min_unique_critics = _parse_int_env(
+                "RIM_RECONCILE_MIN_UNIQUE_CRITICS",
+                3,
+                lower=1,
+                upper=8,
+            )
+            reconcile_max_single_critic_share = _parse_float_env(
+                "RIM_RECONCILE_MAX_SINGLE_CRITIC_SHARE",
+                0.7,
+                lower=0.0,
+                upper=1.0,
+            )
             verification_default = request.mode == "deep"
             verification_enabled = _parse_bool_env(
                 "RIM_ENABLE_VERIFICATION",
@@ -443,12 +455,24 @@ class RimOrchestrator:
                     findings,
                     consensus_min_agents=consensus_min_agents,
                     consensus_min_confidence=consensus_min_confidence,
+                    min_unique_critics_per_node=reconcile_min_unique_critics,
+                    max_single_critic_share=reconcile_max_single_critic_share,
                 )
+                diversity_summary = reconciliation.get("diversity_guardrails", {}).get("summary", {})
                 self.repository.log_stage(
                     run_id=run_id,
                     stage="challenge_reconciliation",
                     status="completed",
-                    meta={"cycle": cycle, **reconciliation["summary"]},
+                    meta={
+                        "cycle": cycle,
+                        **reconciliation["summary"],
+                        "diversity_flagged_count": diversity_summary.get("flagged_count", 0),
+                        "diversity_nodes_evaluated": diversity_summary.get("nodes_evaluated", 0),
+                        "diversity_avg_unique_critics_per_node": diversity_summary.get(
+                            "avg_unique_critics_per_node",
+                            0.0,
+                        ),
+                    },
                 )
                 arbitrations: list[dict[str, object]] = []
                 if enable_arbitration and reconciliation["summary"]["disagreement_count"] > 0:

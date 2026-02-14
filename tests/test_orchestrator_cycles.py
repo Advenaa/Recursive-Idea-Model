@@ -341,6 +341,13 @@ def test_orchestrator_runs_disagreement_arbitration(
     assert len(arbitration_logs) == 1
     assert arbitration_logs[0].status == "completed"
     assert arbitration_logs[0].meta["resolved_count"] >= 1
+    reconciliation_logs = [
+        log
+        for log in orchestrator.get_run_logs(run_id).logs
+        if log.stage == "challenge_reconciliation"
+    ]
+    assert len(reconciliation_logs) == 1
+    assert "diversity_flagged_count" in reconciliation_logs[0].meta
 
 
 def test_orchestrator_runs_devils_advocate_arbitration_round(

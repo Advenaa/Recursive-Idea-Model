@@ -283,7 +283,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Orchestration depth/breadth policy:
   recursive cycle controller and heuristic DepthAllocator exist, but there is no learned depth-vs-breadth policy training yet.
 - Challenge reconciliation:
-  consensus/disagreement aggregation, disagreement arbitration, and confidence-triggered devil's-advocate follow-up rounds are implemented; specialist role-diversity arbitration loops are still missing.
+  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, and baseline role-diversity guardrails are implemented; specialist adaptive arbitration loops are still missing.
 - Verification layer:
   deterministic post-synthesis checks, safe executable expressions, and optional timed `python_exec` checks are implemented, but no theorem/solver/simulation/data-backed verification loop yet.
 - Specialization layer:
@@ -299,7 +299,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 ### 20.4 Gap-Closure Priorities
 
 1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration.
-2. P0: extend critique reconciliation with specialist role-diversity guardrails beyond current devil's-advocate follow-up.
+2. P0: extend critique reconciliation from baseline role-diversity guardrails to specialist adaptive arbitration loops.
 3. P1: add specialization layer with dynamic role/tool selection contracts.
 4. P1: add advanced verification adapters (solver/simulation/data-tool execution beyond safe local expression checks).
 5. P2: upgrade memory to episodic/working/tool stores and implement folding triggers.

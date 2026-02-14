@@ -22,11 +22,15 @@ def reconcile_findings(
     *,
     consensus_min_agents: int = 3,
     consensus_min_confidence: float = 0.7,
+    min_unique_critics_per_node: int = 3,
+    max_single_critic_share: float = 0.7,
 ) -> dict:
     grouped: dict[tuple[str, str], list[CriticFinding]] = defaultdict(list)
+    node_findings: dict[str, list[CriticFinding]] = defaultdict(list)
     for finding in findings:
         key = (finding.node_id, _normalized_issue(finding.issue))
         grouped[key].append(finding)
+        node_findings[finding.node_id].append(finding)
 
     consensus_flaws: list[dict] = []
     per_node_issues: dict[str, list[dict]] = defaultdict(list)
@@ -70,9 +74,49 @@ def reconcile_findings(
             }
         )
 
+    diversity_flags: list[dict] = []
+    unique_counts: list[int] = []
+    normalized_max_share = max(0.0, min(1.0, float(max_single_critic_share)))
+    normalized_min_unique = max(1, int(min_unique_critics_per_node))
+    for node_id, items in node_findings.items():
+        by_critic: dict[str, int] = defaultdict(int)
+        for item in items:
+            by_critic[str(item.critic_type)] += 1
+        total = sum(by_critic.values())
+        if total <= 0:
+            continue
+        dominant_critic, dominant_count = max(by_critic.items(), key=lambda pair: pair[1])
+        dominant_share = dominant_count / float(total)
+        unique_critics = len(by_critic)
+        unique_counts.append(unique_critics)
+        if unique_critics < normalized_min_unique or dominant_share > normalized_max_share:
+            diversity_flags.append(
+                {
+                    "node_id": node_id,
+                    "unique_critics": unique_critics,
+                    "total_findings": total,
+                    "dominant_critic": dominant_critic,
+                    "dominant_share": round(dominant_share, 4),
+                }
+            )
+
+    avg_unique_critics = (
+        round(sum(unique_counts) / len(unique_counts), 3) if unique_counts else 0.0
+    )
+
     return {
         "consensus_flaws": consensus_flaws[:12],
         "disagreements": disagreements[:12],
+        "diversity_guardrails": {
+            "flagged_nodes": diversity_flags[:12],
+            "summary": {
+                "nodes_evaluated": len(node_findings),
+                "flagged_count": len(diversity_flags),
+                "avg_unique_critics_per_node": avg_unique_critics,
+                "min_unique_critics_per_node": normalized_min_unique,
+                "max_single_critic_share": normalized_max_share,
+            },
+        },
         "summary": {
             "total_findings": len(findings),
             "consensus_count": len(consensus_flaws),
