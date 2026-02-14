@@ -12,13 +12,36 @@ RIM proposes an AI system that recursively decomposes, challenges, and synthesiz
 - **Kimi K2.5 Agent Swarm & PARL** (Moonshot AI) — Parallel agent orchestration via reinforcement learning
 - **Continual Learning** (Bhalla, 2026) — Memory systems and feedback loops for persistent improvement
 
+## Operating Mode
+
+The project default is **Deep mode**.
+
+- Deeper recursive analysis is the baseline (target depth: 3-5+ when feasible)
+- Multi-pass challenge and synthesis are preferred over speed
+- Longer end-to-end runtime is acceptable when it improves rigor
+- Use fast mode only when explicitly requested
+
+## Product Document
+
+- `PRD.md` - Product Requirements Document for RIM MVP (Deep mode default)
+- `TECH_SPEC.md` - Technical implementation spec (Codex CLI + Claude CLI execution)
+
 ## Papers
+
+### Main (SOTA)
 
 | File | Description |
 |------|-------------|
-| `rbmo_paper_1.docx` | Original proposal — Recursive Business Model Optimization |
-| `rim_paper_1.docx` | V1 — Generalized to domain-agnostic idea challenging, expanded decomposition & synthesis |
-| `rim_paper_2.docx` | V2 (latest) — Integrated Kimi K2.5 Agent Swarm, PARL, Google scaling research, hybrid depth×breadth architecture |
+| `rim_paper_4.docx` | Current SOTA main paper |
+
+### Archive
+
+| File | Description |
+|------|-------------|
+| `archive/rbmo_paper_1.docx` | Original proposal — Recursive Business Model Optimization |
+| `archive/rim_paper_1.docx` | V1 — Generalized to domain-agnostic idea challenging, expanded decomposition & synthesis |
+| `archive/rim_paper_2.docx` | V2 — Integrated Kimi K2.5 Agent Swarm, PARL, Google scaling research, hybrid depth×breadth architecture |
+| `archive/rim_paper_3.docx` | V3 draft kept for reference |
 
 ## Core Architecture
 
