@@ -110,15 +110,17 @@ Environment variables:
 2. `RIM_CLAUDE_CMD` default `claude`
 3. `RIM_CODEX_ARGS` default `exec --skip-git-repo-check --sandbox read-only`
 4. `RIM_CLAUDE_ARGS` default `-p --output-format json`
-5. `RIM_PROVIDER_TIMEOUT_SEC` default `180`
-6. `RIM_MAX_PARALLEL_CRITICS` default `6`
-7. `RIM_RUN_MAX_PROVIDER_CALLS` default `120`
-8. `RIM_RUN_MAX_PROVIDER_LATENCY_MS` default `900000`
-9. `RIM_RUN_MAX_ESTIMATED_TOKENS` default `500000`
-10. `RIM_RUN_MAX_ESTIMATED_COST_USD` default `10.0`
-11. `RIM_QUEUE_WORKERS` default `1`
-12. `RIM_MEMORY_MAX_AGE_DAYS` default `120`
-13. `RIM_MEMORY_MIN_SEVERITY` default `medium` (or `low` for deep-mode override)
+5. `RIM_CODEX_ENABLE_FEATURES` default `collab` (Codex experimental feature enabled by default)
+6. `RIM_CODEX_DISABLE_FEATURES` optional comma/space-separated disable list
+7. `RIM_PROVIDER_TIMEOUT_SEC` default `180`
+8. `RIM_MAX_PARALLEL_CRITICS` default `6`
+9. `RIM_RUN_MAX_PROVIDER_CALLS` default `120`
+10. `RIM_RUN_MAX_PROVIDER_LATENCY_MS` default `900000`
+11. `RIM_RUN_MAX_ESTIMATED_TOKENS` default `500000`
+12. `RIM_RUN_MAX_ESTIMATED_COST_USD` default `10.0`
+13. `RIM_QUEUE_WORKERS` default `1`
+14. `RIM_MEMORY_MAX_AGE_DAYS` default `120`
+15. `RIM_MEMORY_MIN_SEVERITY` default `medium` (or `low` for deep-mode override)
 
 ## 5) Modes and Runtime Controls
 

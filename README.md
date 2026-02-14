@@ -96,6 +96,10 @@ Provider env vars:
 ```bash
 export RIM_CODEX_CMD=codex
 export RIM_CODEX_ARGS="exec --skip-git-repo-check --sandbox read-only"
+# Experimental Codex features (enabled by default: collab)
+export RIM_CODEX_ENABLE_FEATURES="collab"
+# Optional:
+# export RIM_CODEX_DISABLE_FEATURES="web_search_cached"
 export RIM_CLAUDE_CMD=claude
 export RIM_CLAUDE_ARGS="-p --output-format json"
 export RIM_RUN_MAX_PROVIDER_CALLS=120

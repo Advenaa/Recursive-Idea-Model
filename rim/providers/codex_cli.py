@@ -13,6 +13,22 @@ from typing import Any
 from rim.providers.base import ProviderAdapter, ProviderConfig, ProviderResult, extract_json_blob
 
 
+def _parse_feature_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    chunks = raw.replace(",", " ").split()
+    # Preserve ordering but deduplicate.
+    seen: set[str] = set()
+    features: list[str] = []
+    for chunk in chunks:
+        feature = chunk.strip()
+        if not feature or feature in seen:
+            continue
+        seen.add(feature)
+        features.append(feature)
+    return features
+
+
 class CodexCLIAdapter(ProviderAdapter):
     name = "codex"
 
@@ -26,11 +42,22 @@ class CodexCLIAdapter(ProviderAdapter):
             )
         )
         self.model = os.getenv("RIM_CODEX_MODEL")
+        default_features = os.getenv("RIM_CODEX_EXPERIMENTAL_FEATURES", "collab")
+        self.enable_features = _parse_feature_list(
+            os.getenv("RIM_CODEX_ENABLE_FEATURES", default_features)
+        )
+        self.disable_features = _parse_feature_list(
+            os.getenv("RIM_CODEX_DISABLE_FEATURES")
+        )
 
     def _build_base_cmd(self) -> list[str]:
         cmd = [self.command, *self.default_args]
         if self.model:
             cmd.extend(["--model", self.model])
+        for feature in self.enable_features:
+            cmd.extend(["--enable", feature])
+        for feature in self.disable_features:
+            cmd.extend(["--disable", feature])
         return cmd
 
     async def _run_cmd(
