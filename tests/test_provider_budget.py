@@ -109,6 +109,39 @@ class CapturePromptJsonAdapter:
         )
 
 
+class TransientThenSuccessJsonAdapter:
+    def __init__(self, provider_name: str, fail_count: int = 1) -> None:
+        self.provider_name = provider_name
+        self.fail_count = fail_count
+        self.calls = 0
+
+    async def invoke_json_with_result(self, prompt, config, json_schema=None):  # noqa: ANN001, ANN201
+        self.calls += 1
+        if self.calls <= self.fail_count:
+            raise TimeoutError("temporary network timeout")
+        return (
+            {"ok": True},
+            ProviderResult(
+                text='{"ok": true}',
+                raw_output='{"ok": true}',
+                latency_ms=3,
+                estimated_tokens_in=1,
+                estimated_tokens_out=1,
+                provider=self.provider_name,
+                exit_code=0,
+            ),
+        )
+
+
+class AlwaysTransientJsonAdapter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def invoke_json_with_result(self, prompt, config, json_schema=None):  # noqa: ANN001, ANN201
+        self.calls += 1
+        raise TimeoutError("temporary network timeout")
+
+
 def test_run_budget_enforced() -> None:
     session = ProviderRunSession(
         run_id="run-1",
@@ -222,3 +255,51 @@ def test_determinism_off_leaves_prompt_unchanged() -> None:
     assert payload["ok"] is True
     assert provider == "codex"
     assert adapter.last_prompt == "root prompt"
+
+
+def test_transient_retry_recovers_without_fallback() -> None:
+    flaky = TransientThenSuccessJsonAdapter(provider_name="codex", fail_count=1)
+    backup = SuccessJsonAdapter(provider_name="claude")
+    session = ProviderRunSession(
+        run_id="run-6",
+        providers={"codex": flaky, "claude": backup},
+        stage_policy={"decompose": ["codex", "claude"]},
+        timeout_sec=60,
+        budget=RunBudget(
+            max_calls=10,
+            max_latency_ms=1000,
+            max_tokens=1000,
+            max_estimated_cost_usd=10.0,
+        ),
+        provider_retry_attempts=2,
+        retry_base_ms=0,
+    )
+    payload, provider = asyncio.run(session.invoke_json("decompose", "root prompt"))
+    assert payload["ok"] is True
+    assert provider == "codex"
+    assert flaky.calls == 2
+    assert backup.calls == 0
+
+
+def test_transient_retry_exhausted_then_fallback() -> None:
+    failing = AlwaysTransientJsonAdapter()
+    backup = SuccessJsonAdapter(provider_name="claude")
+    session = ProviderRunSession(
+        run_id="run-7",
+        providers={"codex": failing, "claude": backup},
+        stage_policy={"decompose": ["codex", "claude"]},
+        timeout_sec=60,
+        budget=RunBudget(
+            max_calls=20,
+            max_latency_ms=1000,
+            max_tokens=1000,
+            max_estimated_cost_usd=10.0,
+        ),
+        provider_retry_attempts=2,
+        retry_base_ms=0,
+    )
+    payload, provider = asyncio.run(session.invoke_json("decompose", "root prompt"))
+    assert payload["ok"] is True
+    assert provider == "claude"
+    assert failing.calls == 3
+    assert backup.calls == 1

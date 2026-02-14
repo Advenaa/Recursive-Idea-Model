@@ -48,6 +48,22 @@ def _feedback_delta(entry_type: str, verdict: str) -> float:
     return penalties.get(entry_type, -0.10)
 
 
+def _parse_error_summary(value: str | None) -> tuple[str | None, dict | None]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None, None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw, None
+    if not isinstance(payload, dict):
+        return raw, None
+    message = payload.get("message")
+    if not isinstance(message, str) or not message.strip():
+        message = raw
+    return message.strip(), payload
+
+
 class RunRepository:
     def __init__(self, db_path: str | Path | None = None) -> None:
         self.conn = get_connection(db_path)
@@ -311,10 +327,12 @@ class RunRepository:
                 "confidence_score": run_row["confidence_score"] or 0.0,
             }
 
+        error_summary, error_payload = _parse_error_summary(run_row["error_summary"])
         return {
             "run_id": run_row["id"],
             "status": run_row["status"],
-            "error_summary": run_row["error_summary"],
+            "error_summary": error_summary,
+            "error": error_payload,
             "result": result_payload,
         }
 
@@ -394,7 +412,13 @@ class RunRepository:
         sql += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         rows = self.conn.execute(sql, params).fetchall()
-        return [dict(row) for row in rows]
+        items: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            message, _error_payload = _parse_error_summary(item.get("error_summary"))
+            item["error_summary"] = message
+            items.append(item)
+        return items
 
     def submit_run_feedback(
         self,

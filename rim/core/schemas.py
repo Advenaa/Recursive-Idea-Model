@@ -47,11 +47,19 @@ class AnalyzeResult(BaseModel):
     confidence_score: float = Field(ge=0.0, le=1.0)
 
 
+class RunError(BaseModel):
+    stage: str
+    provider: str | None = None
+    message: str
+    retryable: bool = False
+
+
 class AnalyzeRunResponse(BaseModel):
     run_id: str
     status: Literal["queued", "running", "completed", "failed", "partial"]
     result: AnalyzeResult | None = None
     error_summary: str | None = None
+    error: RunError | None = None
 
 
 class RunSummary(BaseModel):

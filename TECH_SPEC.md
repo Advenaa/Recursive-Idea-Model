@@ -118,12 +118,14 @@ Environment variables:
 10. `RIM_RUN_MAX_PROVIDER_LATENCY_MS` default `900000`
 11. `RIM_RUN_MAX_ESTIMATED_TOKENS` default `500000`
 12. `RIM_RUN_MAX_ESTIMATED_COST_USD` default `10.0`
-13. `RIM_QUEUE_WORKERS` default `1`
-14. `RIM_DETERMINISM_MODE` default `strict` (`off|strict|balanced`)
-15. `RIM_DETERMINISM_SEED` default `42`
-16. `RIM_JSON_REPAIR_RETRIES` default `1` (retry invalid JSON response once before provider fallback)
-17. `RIM_MEMORY_MAX_AGE_DAYS` default `120`
-18. `RIM_MEMORY_MIN_SEVERITY` default `medium` (or `low` for deep-mode override)
+13. `RIM_PROVIDER_MAX_RETRIES` default `2` (transient provider retries before fallback)
+14. `RIM_PROVIDER_RETRY_BASE_MS` default `250` (exponential backoff base delay)
+15. `RIM_QUEUE_WORKERS` default `1`
+16. `RIM_DETERMINISM_MODE` default `strict` (`off|strict|balanced`)
+17. `RIM_DETERMINISM_SEED` default `42`
+18. `RIM_JSON_REPAIR_RETRIES` default `1` (retry invalid JSON response once before provider fallback)
+19. `RIM_MEMORY_MAX_AGE_DAYS` default `120`
+20. `RIM_MEMORY_MIN_SEVERITY` default `medium` (or `low` for deep-mode override)
 
 ## 5) Modes and Runtime Controls
 
@@ -248,6 +250,11 @@ Behavior:
 3. Starts pipeline execution in background by default.
 4. Returns `{ run_id, status }` with HTTP 202 when `wait=false`.
 5. When `wait=true`, blocks until completion and returns full run payload.
+6. On stage failure, response includes structured error:
+   - `stage`,
+   - `provider`,
+   - `message`,
+   - `retryable`.
 
 ### 7.2 `GET /runs`
 

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -164,6 +165,18 @@ def test_list_runs_filters_and_pagination(tmp_path: Path) -> None:
         request_json='{"idea":"idea b","mode":"fast"}',
         status="failed",
     )
+    repo.mark_run_status(
+        run_id="run-b",
+        status="failed",
+        error_summary=json.dumps(
+            {
+                "stage": "synthesis",
+                "provider": "codex",
+                "message": "structured failure",
+                "retryable": True,
+            }
+        ),
+    )
     repo.create_run_with_request(
         run_id="run-c",
         mode="deep",
@@ -177,11 +190,41 @@ def test_list_runs_filters_and_pagination(tmp_path: Path) -> None:
 
     failed_only = repo.list_runs(status="failed", limit=10, offset=0)
     assert [row["id"] for row in failed_only] == ["run-b"]
+    assert failed_only[0]["error_summary"] == "structured failure"
 
     page_one = repo.list_runs(limit=2, offset=0)
     page_two = repo.list_runs(limit=2, offset=2)
     assert [row["id"] for row in page_one] == ["run-c", "run-b"]
     assert [row["id"] for row in page_two] == ["run-a"]
+
+
+def test_get_run_parses_structured_error_summary(tmp_path: Path) -> None:
+    db_path = tmp_path / "rim_test.db"
+    repo = RunRepository(db_path=db_path)
+    repo.create_run_with_request(
+        run_id="run-err",
+        mode="deep",
+        input_idea="idea err",
+        request_json='{"idea":"idea err","mode":"deep"}',
+        status="running",
+    )
+    repo.mark_run_status(
+        run_id="run-err",
+        status="failed",
+        error_summary=json.dumps(
+            {
+                "stage": "decompose",
+                "provider": "claude",
+                "message": "failed to parse",
+                "retryable": False,
+            }
+        ),
+    )
+    run = repo.get_run("run-err")
+    assert run is not None
+    assert run["error_summary"] == "failed to parse"
+    assert run["error"]["stage"] == "decompose"
+    assert run["error"]["provider"] == "claude"
 
 
 def test_feedback_updates_memory_scores_and_creates_feedback_entry(tmp_path: Path) -> None:

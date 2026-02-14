@@ -85,6 +85,11 @@ curl -s -X POST "http://127.0.0.1:8000/analyze?wait=true" \
   -d '{"idea":"Build an AI CFO for freelancers","mode":"deep"}'
 ```
 
+Failure contract:
+
+- Run responses can return `status: "failed"` or `status: "partial"`.
+- Error payload is structured as `{ stage, provider, message, retryable }`.
+
 Run CLI:
 
 ```bash
@@ -116,6 +121,8 @@ export RIM_RUN_MAX_PROVIDER_CALLS=120
 export RIM_RUN_MAX_PROVIDER_LATENCY_MS=900000
 export RIM_RUN_MAX_ESTIMATED_TOKENS=500000
 export RIM_RUN_MAX_ESTIMATED_COST_USD=10.0
+export RIM_PROVIDER_MAX_RETRIES=2
+export RIM_PROVIDER_RETRY_BASE_MS=250
 export RIM_DETERMINISM_MODE=strict
 export RIM_DETERMINISM_SEED=42
 export RIM_JSON_REPAIR_RETRIES=1

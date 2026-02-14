@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from uuid import uuid4
@@ -11,6 +12,7 @@ from rim.core.modes import get_mode_settings
 from rim.core.schemas import (
     AnalyzeRequest,
     AnalyzeResult,
+    RunError,
     RunListResponse,
     RunSummary,
     AnalyzeRunResponse,
@@ -18,7 +20,7 @@ from rim.core.schemas import (
     RunLogsResponse,
     StageLogEntry,
 )
-from rim.providers.base import BudgetExceededError
+from rim.providers.base import BudgetExceededError, StageExecutionError
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
 
@@ -68,6 +70,53 @@ def _memory_entries_from_run(
                 }
             )
     return entries[:20]
+
+
+def _structured_error(
+    *,
+    stage: str,
+    message: str,
+    provider: str | None = None,
+    retryable: bool = False,
+) -> dict:
+    return {
+        "stage": stage,
+        "provider": provider,
+        "message": message,
+        "retryable": retryable,
+    }
+
+
+def _error_from_exception(exc: Exception, default_stage: str) -> dict:
+    if isinstance(exc, StageExecutionError):
+        return exc.to_dict()
+    if isinstance(exc, BudgetExceededError):
+        return _structured_error(
+            stage=default_stage,
+            message=str(exc),
+            provider=None,
+            retryable=False,
+        )
+    return _structured_error(
+        stage=default_stage,
+        message=str(exc),
+        provider=None,
+        retryable=False,
+    )
+
+
+def _fallback_synthesis(idea: str, error_message: str) -> dict[str, object]:
+    return {
+        "synthesized_idea": idea.strip(),
+        "changes_summary": [],
+        "residual_risks": [f"Synthesis stage failed: {error_message}"],
+        "next_experiments": [
+            "Retry this run after checking provider health and stage logs.",
+            "Run in fast mode once to isolate failure surface.",
+            "Reduce constraints and rerun to validate baseline output path.",
+        ],
+        "confidence_score": 0.25,
+    }
 
 
 class RimOrchestrator:
@@ -149,32 +198,48 @@ class RimOrchestrator:
             self.repository.save_findings(run_id, findings)
 
             synth_started = time.perf_counter()
-            synthesis, synthesis_providers = await synthesize_idea(
-                provider_session,
-                request.idea,
-                nodes,
-                findings,
-                settings,
-                memory_context=memory_context,
-            )
-            self.repository.log_stage(
-                run_id=run_id,
-                stage="synthesis",
-                status="completed",
-                provider=",".join(synthesis_providers),
-                latency_ms=int((time.perf_counter() - synth_started) * 1000),
-            )
+            partial_error: dict | None = None
+            try:
+                synthesis, synthesis_providers = await synthesize_idea(
+                    provider_session,
+                    request.idea,
+                    nodes,
+                    findings,
+                    settings,
+                    memory_context=memory_context,
+                )
+                self.repository.log_stage(
+                    run_id=run_id,
+                    stage="synthesis",
+                    status="completed",
+                    provider=",".join(synthesis_providers),
+                    latency_ms=int((time.perf_counter() - synth_started) * 1000),
+                )
+            except Exception as exc:  # noqa: BLE001
+                partial_error = _error_from_exception(exc, default_stage="synthesis")
+                synthesis = _fallback_synthesis(
+                    request.idea,
+                    str(partial_error["message"]),
+                )
+                self.repository.log_stage(
+                    run_id=run_id,
+                    stage="synthesis",
+                    status="failed",
+                    provider=partial_error.get("provider"),
+                    latency_ms=int((time.perf_counter() - synth_started) * 1000),
+                    meta={"error": partial_error},
+                )
             self.repository.save_synthesis(
                 run_id=run_id,
-                synthesized_idea=synthesis["synthesized_idea"],
-                changes_summary=synthesis["changes_summary"],
-                residual_risks=synthesis["residual_risks"],
-                next_experiments=synthesis["next_experiments"],
+                synthesized_idea=str(synthesis["synthesized_idea"]),
+                changes_summary=list(synthesis["changes_summary"]),
+                residual_risks=list(synthesis["residual_risks"]),
+                next_experiments=list(synthesis["next_experiments"]),
             )
             memory_entries = _memory_entries_from_run(
                 findings=findings,
-                changes_summary=synthesis["changes_summary"],
-                residual_risks=synthesis["residual_risks"],
+                changes_summary=list(synthesis["changes_summary"]),
+                residual_risks=list(synthesis["residual_risks"]),
                 domain=request.domain,
             )
             memory_write_started = time.perf_counter()
@@ -199,12 +264,20 @@ class RimOrchestrator:
                 input_idea=request.idea,
                 decomposition=nodes,
                 critic_findings=findings,
-                synthesized_idea=synthesis["synthesized_idea"],
-                changes_summary=synthesis["changes_summary"],
-                residual_risks=synthesis["residual_risks"],
-                next_experiments=synthesis["next_experiments"],
-                confidence_score=synthesis["confidence_score"],
+                synthesized_idea=str(synthesis["synthesized_idea"]),
+                changes_summary=list(synthesis["changes_summary"]),
+                residual_risks=list(synthesis["residual_risks"]),
+                next_experiments=list(synthesis["next_experiments"]),
+                confidence_score=float(synthesis["confidence_score"]),
             )
+            if partial_error is not None:
+                self.repository.mark_run_status(
+                    run_id=run_id,
+                    status="partial",
+                    confidence_score=result.confidence_score,
+                    error_summary=json.dumps(partial_error),
+                )
+                return result
             self.repository.mark_run_status(
                 run_id=run_id,
                 status="completed",
@@ -212,29 +285,32 @@ class RimOrchestrator:
             )
             return result
         except BudgetExceededError as exc:
+            error = _error_from_exception(exc, default_stage="provider_budget")
             self.repository.log_stage(
                 run_id=run_id,
                 stage="provider_budget",
                 status="failed",
-                meta={"error": str(exc), **provider_session.get_usage_meta()},
+                meta={"error": error, **provider_session.get_usage_meta()},
             )
             self.repository.mark_run_status(
                 run_id=run_id,
                 status="failed",
-                error_summary=str(exc),
+                error_summary=json.dumps(error),
             )
             raise
         except Exception as exc:  # noqa: BLE001
+            error = _error_from_exception(exc, default_stage="pipeline")
             self.repository.mark_run_status(
                 run_id=run_id,
                 status="failed",
-                error_summary=str(exc),
+                error_summary=json.dumps(error),
             )
             self.repository.log_stage(
                 run_id=run_id,
-                stage="pipeline",
+                stage=str(error["stage"]),
                 status="failed",
-                meta={"error": str(exc)},
+                provider=error.get("provider"),
+                meta={"error": error},
             )
             raise
 
@@ -251,10 +327,17 @@ class RimOrchestrator:
             if payload.get("result")
             else None
         )
+        error = None
+        if isinstance(payload.get("error"), dict):
+            try:
+                error = RunError.model_validate(payload["error"])
+            except Exception:  # noqa: BLE001
+                error = None
         return AnalyzeRunResponse(
             run_id=payload["run_id"],
             status=payload["status"],
             error_summary=payload.get("error_summary"),
+            error=error,
             result=result,
         )
 

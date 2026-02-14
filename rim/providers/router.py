@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any
 
-from rim.providers.base import BudgetExceededError, ProviderConfig, ProviderResult
+from rim.providers.base import (
+    BudgetExceededError,
+    ProviderConfig,
+    ProviderResult,
+    StageExecutionError,
+)
 from rim.providers.claude_cli import ClaudeCLIAdapter
 from rim.providers.codex_cli import CodexCLIAdapter
 
@@ -63,6 +69,54 @@ def _with_determinism_hints(
     return f"{header}\n\n{prompt}"
 
 
+def _is_transient_provider_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, OSError):
+        return True
+    if isinstance(exc, StageExecutionError):
+        return bool(exc.retryable)
+    text = str(exc).strip().lower()
+    if not text:
+        return False
+    transient_markers = (
+        "timeout",
+        "timed out",
+        "rate limit",
+        "429",
+        "503",
+        "service unavailable",
+        "temporar",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "network",
+        "try again",
+    )
+    return any(marker in text for marker in transient_markers)
+
+
+def _is_json_shape_error(exc: Exception) -> bool:
+    text = str(exc).strip().lower()
+    if not text:
+        return False
+    markers = (
+        "json",
+        "no valid json object",
+        "missing json",
+        "invalid json",
+        "parse",
+        "schema",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _backoff_seconds(base_ms: int, attempt: int) -> float:
+    if base_ms <= 0:
+        return 0.0
+    return (base_ms * (2**attempt)) / 1000.0
+
+
 def _json_repair_prompt(
     *,
     stage: str,
@@ -118,6 +172,8 @@ class ProviderRunSession:
         json_repair_attempts: int = 1,
         determinism_mode: str = "strict",
         determinism_seed: int = 42,
+        provider_retry_attempts: int = 2,
+        retry_base_ms: int = 250,
     ) -> None:
         self.run_id = run_id
         self.providers = providers
@@ -127,6 +183,8 @@ class ProviderRunSession:
         self.json_repair_attempts = max(0, int(json_repair_attempts))
         self.determinism_mode = _normalize_determinism_mode(determinism_mode)
         self.determinism_seed = int(determinism_seed)
+        self.provider_retry_attempts = max(0, int(provider_retry_attempts))
+        self.retry_base_ms = max(0, int(retry_base_ms))
         self.usage = RunUsage()
         self.provider_results: list[ProviderResult] = []
 
@@ -199,10 +257,55 @@ class ProviderRunSession:
                 "max_tokens": self.budget.max_tokens,
                 "max_estimated_cost_usd": self.budget.max_estimated_cost_usd,
             },
+            "retry": {
+                "provider_retry_attempts": self.provider_retry_attempts,
+                "retry_base_ms": self.retry_base_ms,
+                "json_repair_attempts": self.json_repair_attempts,
+            },
         }
 
+    async def _invoke_with_backoff(
+        self,
+        *,
+        stage: str,
+        provider_name: str,
+        invoke_once: Any,
+    ) -> Any:
+        last_exc: Exception | None = None
+        for attempt in range(self.provider_retry_attempts + 1):
+            self._check_budget_before_call()
+            try:
+                return await invoke_once()
+            except BudgetExceededError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                retryable = _is_transient_provider_error(exc)
+                if retryable and attempt < self.provider_retry_attempts:
+                    await asyncio.sleep(_backoff_seconds(self.retry_base_ms, attempt))
+                    continue
+                raise StageExecutionError(
+                    stage=stage,
+                    provider=provider_name,
+                    message=f"{exc} (attempts={attempt + 1})",
+                    retryable=retryable,
+                ) from exc
+        if last_exc is None:
+            raise StageExecutionError(
+                stage=stage,
+                provider=provider_name,
+                message="Provider call failed without exception details.",
+                retryable=False,
+            )
+        raise StageExecutionError(
+            stage=stage,
+            provider=provider_name,
+            message=str(last_exc),
+            retryable=False,
+        ) from last_exc
+
     async def invoke_text(self, stage: str, prompt: str) -> tuple[str, str]:
-        errors: list[str] = []
+        errors: list[StageExecutionError] = []
         config = ProviderConfig(timeout_sec=self.timeout_sec)
         stage_prompt = _with_determinism_hints(
             stage=stage,
@@ -211,18 +314,28 @@ class ProviderRunSession:
             seed=self.determinism_seed,
         )
         for provider_name in self._providers_for_stage(stage):
-            self._check_budget_before_call()
             adapter = self.providers[provider_name]
             try:
-                result = await adapter.invoke(stage_prompt, config)
+                result = await self._invoke_with_backoff(
+                    stage=stage,
+                    provider_name=provider_name,
+                    invoke_once=lambda: adapter.invoke(stage_prompt, config),
+                )
                 self._apply_result_to_usage(result)
                 return result.text, provider_name
             except BudgetExceededError:
                 raise
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{provider_name}: {exc}")
-        raise RuntimeError(
-            f"All providers failed for stage '{stage}'. " + "; ".join(errors)
+            except StageExecutionError as exc:
+                errors.append(exc)
+        joined = "; ".join(
+            f"{err.provider}: {err.message}"
+            for err in errors
+        )
+        raise StageExecutionError(
+            stage=stage,
+            provider=None,
+            message=f"All providers failed for stage '{stage}'. {joined}",
+            retryable=any(err.retryable for err in errors),
         )
 
     async def invoke_json(
@@ -231,7 +344,7 @@ class ProviderRunSession:
         prompt: str,
         json_schema: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str]:
-        errors: list[str] = []
+        errors: list[StageExecutionError] = []
         config = ProviderConfig(timeout_sec=self.timeout_sec)
         stage_prompt = _with_determinism_hints(
             stage=stage,
@@ -243,34 +356,47 @@ class ProviderRunSession:
             adapter = self.providers[provider_name]
             attempt_prompt = stage_prompt
             for attempt in range(self.json_repair_attempts + 1):
-                self._check_budget_before_call()
                 try:
-                    payload, result = await adapter.invoke_json_with_result(
-                        prompt=attempt_prompt,
-                        config=config,
-                        json_schema=json_schema,
+                    payload, result = await self._invoke_with_backoff(
+                        stage=stage,
+                        provider_name=provider_name,
+                        invoke_once=lambda: adapter.invoke_json_with_result(
+                            prompt=attempt_prompt,
+                            config=config,
+                            json_schema=json_schema,
+                        ),
                     )
                     self._apply_result_to_usage(result)
                     return payload, provider_name
                 except BudgetExceededError:
                     raise
-                except Exception as exc:  # noqa: BLE001
-                    suffix = (
-                        " (repair retry)"
-                        if attempt < self.json_repair_attempts
-                        else ""
-                    )
-                    errors.append(f"{provider_name}: {exc}{suffix}")
-                    if attempt < self.json_repair_attempts:
+                except StageExecutionError as exc:
+                    if attempt < self.json_repair_attempts and _is_json_shape_error(exc):
+                        errors.append(
+                            StageExecutionError(
+                                stage=exc.stage,
+                                provider=exc.provider,
+                                message=f"{exc.message} (repair retry)",
+                                retryable=exc.retryable,
+                            )
+                        )
                         attempt_prompt = _json_repair_prompt(
                             stage=stage,
                             original_prompt=stage_prompt,
-                            error=str(exc),
+                            error=exc.message,
                         )
                         continue
+                    errors.append(exc)
                     break
-        raise RuntimeError(
-            f"All providers failed for stage '{stage}'. " + "; ".join(errors)
+        joined = "; ".join(
+            f"{err.provider}: {err.message}"
+            for err in errors
+        )
+        raise StageExecutionError(
+            stage=stage,
+            provider=None,
+            message=f"All providers failed for stage '{stage}'. {joined}",
+            retryable=any(err.retryable for err in errors),
         )
 
 
@@ -289,6 +415,14 @@ class ProviderRouter:
             max_estimated_cost_usd=float(os.getenv("RIM_RUN_MAX_ESTIMATED_COST_USD", "10.0")),
         )
         self.default_json_repair_attempts = int(os.getenv("RIM_JSON_REPAIR_RETRIES", "1"))
+        self.default_provider_retry_attempts = max(
+            0,
+            _parse_int_env(os.getenv("RIM_PROVIDER_MAX_RETRIES"), 2),
+        )
+        self.default_retry_base_ms = max(
+            0,
+            _parse_int_env(os.getenv("RIM_PROVIDER_RETRY_BASE_MS"), 250),
+        )
         self.default_determinism_mode = _normalize_determinism_mode(
             os.getenv("RIM_DETERMINISM_MODE", "strict")
         )
@@ -313,6 +447,8 @@ class ProviderRouter:
             json_repair_attempts=self.default_json_repair_attempts,
             determinism_mode=self.default_determinism_mode,
             determinism_seed=self.default_determinism_seed,
+            provider_retry_attempts=self.default_provider_retry_attempts,
+            retry_base_ms=self.default_retry_base_ms,
         )
 
     async def invoke_text(self, stage: str, prompt: str) -> tuple[str, str]:

@@ -10,6 +10,7 @@ from rim.core.schemas import (
     RunLogsResponse,
     RunSummary,
     RunListResponse,
+    RunError,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "RunLogsResponse",
     "RunSummary",
     "RunListResponse",
+    "RunError",
 ]

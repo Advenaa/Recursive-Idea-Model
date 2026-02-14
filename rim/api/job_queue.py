@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 
 from rim.core.orchestrator import RimOrchestrator
@@ -67,16 +68,22 @@ class RunJobQueue:
 
             request_payload = self.repository.get_run_request(run_id)
             if request_payload is None:
+                error = {
+                    "stage": "queue",
+                    "provider": None,
+                    "message": "Missing or invalid request payload for queued run.",
+                    "retryable": False,
+                }
                 self.repository.mark_run_status(
                     run_id,
                     status="failed",
-                    error_summary="Missing or invalid request payload for queued run.",
+                    error_summary=json.dumps(error),
                 )
                 self.repository.log_stage(
                     run_id=run_id,
                     stage="queue",
                     status="failed",
-                    meta={"error": "missing_request_payload"},
+                    meta={"error": error},
                 )
                 self.queue.task_done()
                 continue
@@ -84,16 +91,22 @@ class RunJobQueue:
             try:
                 request = AnalyzeRequest.model_validate(request_payload)
             except Exception as exc:  # noqa: BLE001
+                error = {
+                    "stage": "queue",
+                    "provider": None,
+                    "message": f"Failed to decode request payload: {exc}",
+                    "retryable": False,
+                }
                 self.repository.mark_run_status(
                     run_id,
                     status="failed",
-                    error_summary=f"Failed to decode request payload: {exc}",
+                    error_summary=json.dumps(error),
                 )
                 self.repository.log_stage(
                     run_id=run_id,
                     stage="queue",
                     status="failed",
-                    meta={"error": "request_validation_failed"},
+                    meta={"error": error},
                 )
                 self.queue.task_done()
                 continue

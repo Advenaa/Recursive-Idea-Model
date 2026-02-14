@@ -30,6 +30,32 @@ class BudgetExceededError(RuntimeError):
     """Raised when per-run provider budgets are exceeded."""
 
 
+class StageExecutionError(RuntimeError):
+    """Structured stage failure with retryability metadata."""
+
+    def __init__(
+        self,
+        *,
+        stage: str,
+        message: str,
+        provider: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        self.stage = str(stage)
+        self.provider = provider
+        self.message = str(message)
+        self.retryable = bool(retryable)
+        super().__init__(self.message)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "provider": self.provider,
+            "message": self.message,
+            "retryable": self.retryable,
+        }
+
+
 def _strip_markdown_fences(text: str) -> str:
     cleaned = text.strip()
     if cleaned.startswith("```json"):
