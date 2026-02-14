@@ -18,6 +18,7 @@ class ModeSettings:
     marginal_gain_min_new_nodes: int
     marginal_gain_patience: int
     max_children_per_node: int
+    max_total_nodes: int
     runtime_budget_sec: int
 
 
@@ -32,6 +33,7 @@ DEEP_MODE = ModeSettings(
     marginal_gain_min_new_nodes=2,
     marginal_gain_patience=2,
     max_children_per_node=4,
+    max_total_nodes=96,
     runtime_budget_sec=420,
 )
 
@@ -46,6 +48,7 @@ FAST_MODE = ModeSettings(
     marginal_gain_min_new_nodes=1,
     marginal_gain_patience=1,
     max_children_per_node=2,
+    max_total_nodes=24,
     runtime_budget_sec=120,
 )
 

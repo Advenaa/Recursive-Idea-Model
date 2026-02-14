@@ -65,6 +65,22 @@ Memory context from prior runs:
 {memory_context}
 """
 
+STOP_PRIORITY = [
+    "runtime_budget",
+    "branch_budget",
+    "confidence_threshold",
+    "marginal_gain",
+    "max_depth",
+    "exhausted",
+]
+
+
+def _stop_priority_rank(reason: str) -> int:
+    try:
+        return STOP_PRIORITY.index(reason)
+    except ValueError:
+        return len(STOP_PRIORITY)
+
 
 def _clamp_confidence(value: Any) -> float:
     try:
@@ -181,13 +197,21 @@ async def decompose_idea(
         if time.monotonic() - started > settings.runtime_budget_sec:
             stop_reason = "runtime_budget"
             break
+        if len(all_nodes) >= settings.max_total_nodes:
+            stop_reason = "branch_budget"
+            break
 
         levels_executed += 1
         next_level: list[DecompositionNode] = []
         level_new_nodes = 0
+        expandable_parents = 0
+        skipped_by_confidence = 0
+        budget_hit = False
         for parent in current_level:
             if parent.confidence >= settings.confidence_stop_threshold:
+                skipped_by_confidence += 1
                 continue
+            expandable_parents += 1
             children, provider = await _decompose_component(
                 router=router,
                 parent=parent,
@@ -199,6 +223,9 @@ async def decompose_idea(
             )
             provider_order.append(provider)
             for child in children:
+                if len(all_nodes) >= settings.max_total_nodes:
+                    budget_hit = True
+                    break
                 key = child.component_text.strip().lower()
                 if not key or key in seen_components:
                     continue
@@ -206,6 +233,15 @@ async def decompose_idea(
                 next_level.append(child)
                 all_nodes.append(child)
                 level_new_nodes += 1
+            if budget_hit:
+                break
+        if budget_hit:
+            stop_reason = "branch_budget"
+            break
+
+        if level_new_nodes == 0 and skipped_by_confidence > 0 and expandable_parents == 0:
+            stop_reason = "confidence_threshold"
+            break
 
         if level_new_nodes < settings.marginal_gain_min_new_nodes:
             low_gain_levels += 1
@@ -220,8 +256,11 @@ async def decompose_idea(
     provider = provider_order[-1] if provider_order else "none"
     meta = {
         "stop_reason": stop_reason,
+        "stop_priority_rank": _stop_priority_rank(stop_reason),
         "levels_executed": levels_executed,
         "runtime_sec": round(time.monotonic() - started, 3),
         "unique_components": len(seen_components),
+        "total_nodes": len(all_nodes),
+        "branch_budget_nodes": settings.max_total_nodes,
     }
     return all_nodes, provider, meta

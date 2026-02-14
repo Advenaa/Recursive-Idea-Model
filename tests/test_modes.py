@@ -8,6 +8,7 @@ def test_default_deep_mode_settings() -> None:
     assert settings.self_critique_pass is True
     assert settings.max_children_per_node > FAST_MODE.max_children_per_node
     assert settings.runtime_budget_sec > FAST_MODE.runtime_budget_sec
+    assert settings.max_total_nodes > FAST_MODE.max_total_nodes
 
 
 def test_fast_mode_settings() -> None:
