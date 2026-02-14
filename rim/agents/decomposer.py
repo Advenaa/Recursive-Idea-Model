@@ -33,17 +33,17 @@ DECOMPOSE_SCHEMA = {
 
 DECOMPOSE_PROMPT = """You are a rigorous idea decomposition engine.
 Return STRICT JSON only with this schema:
-{
+{{
   "nodes": [
-    {
+    {{
       "parent_node_id": "string|null",
       "depth": 0,
       "component_text": "string",
       "node_type": "claim|assumption|dependency",
       "confidence": 0.0
-    }
+    }}
   ]
-}
+}}
 
 Rules:
 - Decompose the idea into concise analyzable components.

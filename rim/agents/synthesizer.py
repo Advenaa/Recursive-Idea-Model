@@ -35,13 +35,13 @@ SYNTHESIS_SCHEMA = {
 
 SYNTHESIZE_PROMPT = """You are a synthesis engine for Recursive Idea Model.
 Return STRICT JSON only:
-{
+{{
   "synthesized_idea": "string",
   "changes_summary": ["string"],
   "residual_risks": ["string"],
   "next_experiments": ["string"],
   "confidence_score": 0.0
-}
+}}
 
 Original idea:
 {idea}

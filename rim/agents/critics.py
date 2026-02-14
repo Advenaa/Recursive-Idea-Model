@@ -22,12 +22,12 @@ CRITIC_SCHEMA = {
 
 CRITIC_PROMPT = """You are the {critic_type} critic for one idea component.
 Return STRICT JSON only with:
-{
+{{
   "issue": "string",
   "severity": "low|medium|high|critical",
   "confidence": 0.0,
   "suggested_fix": "string"
-}
+}}
 
 Evidence requirement: {evidence_requirement}
 
