@@ -17,6 +17,7 @@ from rim.eval.runner import (
     save_blind_review_packet,
     save_report,
     train_depth_policy,
+    train_spawn_policy,
     train_specialist_arbitration_policy,
 )
 
@@ -480,4 +481,54 @@ def test_train_specialist_arbitration_policy_aggregates_reports() -> None:
     assert "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP" in env
     assert "RIM_SPECIALIST_ARBITRATION_MAX_JOBS" in env
     assert "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE" in env
+    assert payload["recommended_exports"]
+
+
+def test_train_spawn_policy_aggregates_reports() -> None:
+    reports = [
+        {
+            "created_at": "2026-02-14T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.54,
+            "average_runtime_sec": 61.0,
+            "failure_count": 1,
+            "runs": [
+                {
+                    "status": "completed",
+                    "telemetry": {
+                        "disagreement_count": 3,
+                        "spawn_selected_count": 3,
+                        "spawn_dynamic_count": 2,
+                    },
+                }
+            ],
+        },
+        {
+            "created_at": "2026-02-15T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.71,
+            "average_runtime_sec": 48.0,
+            "failure_count": 0,
+            "runs": [
+                {
+                    "status": "completed",
+                    "telemetry": {
+                        "disagreement_count": 1,
+                        "spawn_selected_count": 2,
+                        "spawn_dynamic_count": 1,
+                    },
+                }
+            ],
+        },
+    ]
+    payload = train_spawn_policy(
+        reports,
+        target_quality=0.7,
+        target_runtime_sec=60.0,
+    )
+    assert payload["report_count"] == 2
+    env = payload["policy_env"]
+    assert "RIM_SPAWN_MIN_ROLE_SCORE" in env
+    assert "RIM_SPAWN_MAX_SPECIALISTS_DEEP" in env
+    assert "RIM_ENABLE_DYNAMIC_SPECIALISTS" in env
     assert payload["recommended_exports"]

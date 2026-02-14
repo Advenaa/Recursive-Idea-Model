@@ -124,6 +124,7 @@ rim eval calibrate --target-quality 0.65 --target-runtime-sec 60
 rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-runtime-sec 60
 rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
+rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 ```
 
 Provider env vars:
@@ -180,6 +181,8 @@ export RIM_SPAWN_MAX_SPECIALISTS_DEEP=3
 export RIM_SPAWN_MAX_SPECIALISTS_FAST=1
 export RIM_ENABLE_DYNAMIC_SPECIALISTS=1
 export RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS=2
+# Optional trained spawn policy file from `rim eval train-spawn-policy` output
+export RIM_SPAWN_POLICY_PATH=rim/eval/reports/spawn_policy.json
 export RIM_ENABLE_EXECUTABLE_VERIFICATION=1
 export RIM_EXEC_VERIFY_MAX_CHECKS=5
 export RIM_ENABLE_PYTHON_EXEC_CHECKS=0

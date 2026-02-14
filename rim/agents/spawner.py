@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections import Counter
@@ -90,6 +91,89 @@ def _parse_float_env(name: str, default: float, *, lower: float, upper: float) -
     except (TypeError, ValueError):
         value = float(default)
     return max(lower, min(upper, value))
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _coerce_bool(value: object, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _coerce_int(value: object, default: int, *, lower: int, upper: int) -> int:
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return max(lower, min(upper, parsed))
+
+
+def _coerce_float(value: object, default: float, *, lower: float, upper: float) -> float:
+    try:
+        parsed = float(str(value))
+    except (TypeError, ValueError):
+        parsed = float(default)
+    return max(lower, min(upper, parsed))
+
+
+def _extract_policy_env(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        return {}
+    direct = {
+        key: value
+        for key, value in payload.items()
+        if isinstance(key, str) and key.startswith("RIM_")
+    }
+    if direct:
+        return direct
+    for key in ("policy_env", "recommended_env", "policy", "calibration"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            extracted = _extract_policy_env(nested)
+            if extracted:
+                return extracted
+    return {}
+
+
+def _load_spawn_policy_env(path_value: str) -> tuple[dict[str, object], str | None]:
+    path = str(path_value or "").strip()
+    if not path:
+        return {}, None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.loads(handle.read())
+    except Exception as exc:  # noqa: BLE001
+        return {}, str(exc)
+    env = _extract_policy_env(payload)
+    allowed = {
+        "RIM_SPAWN_MIN_ROLE_SCORE",
+        "RIM_SPAWN_MAX_SPECIALISTS_DEEP",
+        "RIM_SPAWN_MAX_SPECIALISTS_FAST",
+        "RIM_ENABLE_DYNAMIC_SPECIALISTS",
+        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS",
+    }
+    filtered = {key: value for key, value in env.items() if key in allowed}
+    if not filtered:
+        return {}, "No spawn-policy keys found in policy file."
+    return filtered, None
 
 
 def _domain_hint_role(domain: str | None) -> str | None:
@@ -187,18 +271,58 @@ def build_spawn_plan(
     constraint_counts = _token_counts(" ".join(str(item) for item in list(constraints or [])))
     memory_counts = _token_counts(" ".join(str(item) for item in list(memory_context or [])[:6]))
     hint_role = _domain_hint_role(domain)
+    spawn_policy_path = str(os.getenv("RIM_SPAWN_POLICY_PATH", "")).strip()
+    spawn_policy_env: dict[str, object] = {}
+    spawn_policy_error: str | None = None
+    if spawn_policy_path:
+        spawn_policy_env, spawn_policy_error = _load_spawn_policy_env(spawn_policy_path)
+    min_role_score_default = 1.0
+    dynamic_enabled_default = True
+    max_dynamic_specialists_default = 2
+    max_specialists_deep_default = 3
+    max_specialists_fast_default = 1
+    if spawn_policy_env:
+        min_role_score_default = _coerce_float(
+            spawn_policy_env.get("RIM_SPAWN_MIN_ROLE_SCORE"),
+            min_role_score_default,
+            lower=0.0,
+            upper=20.0,
+        )
+        dynamic_enabled_default = _coerce_bool(
+            spawn_policy_env.get("RIM_ENABLE_DYNAMIC_SPECIALISTS"),
+            dynamic_enabled_default,
+        )
+        max_dynamic_specialists_default = _coerce_int(
+            spawn_policy_env.get("RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"),
+            max_dynamic_specialists_default,
+            lower=0,
+            upper=6,
+        )
+        max_specialists_deep_default = _coerce_int(
+            spawn_policy_env.get("RIM_SPAWN_MAX_SPECIALISTS_DEEP"),
+            max_specialists_deep_default,
+            lower=1,
+            upper=8,
+        )
+        max_specialists_fast_default = _coerce_int(
+            spawn_policy_env.get("RIM_SPAWN_MAX_SPECIALISTS_FAST"),
+            max_specialists_fast_default,
+            lower=1,
+            upper=4,
+        )
     min_role_score = _parse_float_env(
         "RIM_SPAWN_MIN_ROLE_SCORE",
-        1.0,
+        min_role_score_default,
         lower=0.0,
         upper=20.0,
     )
-    enable_dynamic_specialists = str(
-        os.getenv("RIM_ENABLE_DYNAMIC_SPECIALISTS", "1")
-    ).strip().lower() not in {"0", "false", "no", "off"}
+    enable_dynamic_specialists = _parse_bool_env(
+        "RIM_ENABLE_DYNAMIC_SPECIALISTS",
+        dynamic_enabled_default,
+    )
     max_dynamic_specialists = _parse_int_env(
         "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS",
-        2,
+        max_dynamic_specialists_default,
         lower=0,
         upper=6,
     )
@@ -261,9 +385,19 @@ def build_spawn_plan(
     # Deep mode can carry more specialists, fast mode keeps one maximum.
     mode_normalized = str(mode).strip().lower()
     max_specialists = (
-        _parse_int_env("RIM_SPAWN_MAX_SPECIALISTS_DEEP", 3, lower=1, upper=8)
+        _parse_int_env(
+            "RIM_SPAWN_MAX_SPECIALISTS_DEEP",
+            max_specialists_deep_default,
+            lower=1,
+            upper=8,
+        )
         if mode_normalized == "deep"
-        else _parse_int_env("RIM_SPAWN_MAX_SPECIALISTS_FAST", 1, lower=1, upper=4)
+        else _parse_int_env(
+            "RIM_SPAWN_MAX_SPECIALISTS_FAST",
+            max_specialists_fast_default,
+            lower=1,
+            upper=4,
+        )
     )
     scored_candidates.sort(
         key=lambda item: (
@@ -282,5 +416,8 @@ def build_spawn_plan(
         "min_role_score": min_role_score,
         "domain_hint_role": hint_role,
         "dynamic_enabled": enable_dynamic_specialists,
+        "policy_applied": bool(spawn_policy_env),
+        "policy_path": spawn_policy_path or None,
+        "policy_error": spawn_policy_error,
         "mode": str(mode),
     }

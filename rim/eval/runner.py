@@ -1043,6 +1043,313 @@ def train_specialist_arbitration_policy(
     }
 
 
+def _spawn_report_signals(report: dict[str, Any]) -> dict[str, float]:
+    runs = report.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    completed = [
+        item
+        for item in runs
+        if isinstance(item, dict) and str(item.get("status") or "").strip().lower() == "completed"
+    ]
+    if not completed:
+        return {
+            "completed_runs": 0.0,
+            "avg_disagreement_count": 0.0,
+            "avg_spawn_selected_count": 0.0,
+            "avg_spawn_dynamic_count": 0.0,
+        }
+
+    disagreement_total = 0.0
+    selected_total = 0.0
+    dynamic_total = 0.0
+    for item in completed:
+        telemetry = item.get("telemetry")
+        if not isinstance(telemetry, dict):
+            continue
+        disagreement_total += _to_float(telemetry.get("disagreement_count"), 0.0)
+        selected_total += _to_float(telemetry.get("spawn_selected_count"), 0.0)
+        dynamic_total += _to_float(telemetry.get("spawn_dynamic_count"), 0.0)
+
+    count = float(len(completed))
+    return {
+        "completed_runs": count,
+        "avg_disagreement_count": round(disagreement_total / count, 4),
+        "avg_spawn_selected_count": round(selected_total / count, 4),
+        "avg_spawn_dynamic_count": round(dynamic_total / count, 4),
+    }
+
+
+def calibrate_spawn_policy(
+    report: dict[str, Any],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    avg_quality = float(report.get("average_quality_score", 0.0))
+    avg_runtime = float(report.get("average_runtime_sec", 0.0))
+    dataset_size = max(1, int(report.get("dataset_size", 1)))
+    failures = int(report.get("failure_count", 0))
+    failure_rate = failures / float(dataset_size)
+    telemetry = _spawn_report_signals(report)
+
+    quality_gap = float(target_quality) - avg_quality
+    quality_pressure = _clamp_float(quality_gap / max(float(target_quality), 0.05), -1.0, 1.0)
+    runtime_pressure = 0.0
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        runtime_pressure = (avg_runtime - float(target_runtime_sec)) / float(target_runtime_sec)
+
+    disagreement_pressure = _clamp_float(
+        float(telemetry["avg_disagreement_count"]) / 2.0,
+        0.0,
+        1.0,
+    )
+    dynamic_pressure = _clamp_float(
+        float(telemetry["avg_spawn_dynamic_count"]) / 2.0,
+        0.0,
+        1.0,
+    )
+    spawn_pressure = (
+        (0.7 * quality_pressure)
+        + (0.5 * disagreement_pressure)
+        + (0.25 * dynamic_pressure)
+        - (0.6 * max(runtime_pressure, 0.0))
+        - (0.45 * failure_rate)
+    )
+    spawn_pressure = _clamp_float(spawn_pressure, -1.0, 1.0)
+
+    base = {
+        "RIM_SPAWN_MIN_ROLE_SCORE": 1.0,
+        "RIM_SPAWN_MAX_SPECIALISTS_DEEP": 3,
+        "RIM_SPAWN_MAX_SPECIALISTS_FAST": 1,
+        "RIM_ENABLE_DYNAMIC_SPECIALISTS": 1,
+        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": 2,
+    }
+    min_role_score = round(
+        _clamp_float(
+            base["RIM_SPAWN_MIN_ROLE_SCORE"] - (0.45 * max(spawn_pressure, 0.0)) + (0.35 * max(-spawn_pressure, 0.0)),
+            0.4,
+            2.5,
+        ),
+        3,
+    )
+    max_specialists_deep = _clamp_int(
+        int(round(base["RIM_SPAWN_MAX_SPECIALISTS_DEEP"] + (2.0 * max(spawn_pressure, 0.0)) - (1.0 * max(-spawn_pressure, 0.0)))),
+        1,
+        8,
+    )
+    max_specialists_fast = _clamp_int(
+        int(round(base["RIM_SPAWN_MAX_SPECIALISTS_FAST"] + (1.0 * max(spawn_pressure, 0.0)))),
+        1,
+        4,
+    )
+    enable_dynamic = 1
+    if (
+        quality_pressure <= 0.0
+        and max(runtime_pressure, 0.0) > 0.3
+        and disagreement_pressure < 0.2
+        and dynamic_pressure < 0.2
+    ):
+        enable_dynamic = 0
+    max_dynamic = _clamp_int(
+        int(round(base["RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"] + (2.0 * max(spawn_pressure, 0.0)) - (1.0 * max(runtime_pressure, 0.0)))),
+        0,
+        6,
+    )
+    if enable_dynamic == 0:
+        max_dynamic = 0
+
+    rationale: list[str] = []
+    if quality_pressure > 0.15:
+        rationale.append("Average quality is below target; spawn thresholds are relaxed for broader specialist coverage.")
+    elif quality_pressure < -0.15:
+        rationale.append("Average quality is above target; spawn thresholds can tighten.")
+    if disagreement_pressure > 0.25:
+        rationale.append("Disagreement pressure indicates value from broader specialist exploration.")
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        if avg_runtime > float(target_runtime_sec):
+            rationale.append("Average runtime exceeds target; spawn breadth is moderated.")
+        else:
+            rationale.append("Average runtime is within target runtime budget.")
+    if failure_rate > 0.2:
+        rationale.append("Failure rate is elevated; policy avoids aggressive specialist expansion.")
+
+    recommended_env = {
+        "RIM_SPAWN_MIN_ROLE_SCORE": min_role_score,
+        "RIM_SPAWN_MAX_SPECIALISTS_DEEP": max_specialists_deep,
+        "RIM_SPAWN_MAX_SPECIALISTS_FAST": max_specialists_fast,
+        "RIM_ENABLE_DYNAMIC_SPECIALISTS": enable_dynamic,
+        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": max_dynamic,
+    }
+    return {
+        "inputs": {
+            "average_quality_score": avg_quality,
+            "average_runtime_sec": avg_runtime,
+            "failure_rate": round(failure_rate, 4),
+            "dataset_size": dataset_size,
+            "target_quality": float(target_quality),
+            "target_runtime_sec": target_runtime_sec,
+            "telemetry": telemetry,
+        },
+        "signals": {
+            "quality_pressure": round(quality_pressure, 4),
+            "runtime_pressure": round(runtime_pressure, 4),
+            "disagreement_pressure": round(disagreement_pressure, 4),
+            "dynamic_pressure": round(dynamic_pressure, 4),
+            "spawn_pressure": round(spawn_pressure, 4),
+        },
+        "base": base,
+        "recommended_env": recommended_env,
+        "rationale": rationale,
+    }
+
+
+def train_spawn_policy(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    valid_reports: list[dict[str, Any]] = []
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        if int(report.get("dataset_size", 0)) <= 0:
+            continue
+        valid_reports.append(report)
+
+    if not valid_reports:
+        empty_policy = {
+            "RIM_SPAWN_MIN_ROLE_SCORE": 1.0,
+            "RIM_SPAWN_MAX_SPECIALISTS_DEEP": 3,
+            "RIM_SPAWN_MAX_SPECIALISTS_FAST": 1,
+            "RIM_ENABLE_DYNAMIC_SPECIALISTS": 1,
+            "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": 2,
+        }
+        return {
+            "report_count": 0,
+            "policy_env": empty_policy,
+            "rationale": ["No valid reports were available; returning default spawn policy."],
+        }
+
+    weighted: dict[str, float] = {
+        "RIM_SPAWN_MIN_ROLE_SCORE": 0.0,
+        "RIM_SPAWN_MAX_SPECIALISTS_DEEP": 0.0,
+        "RIM_SPAWN_MAX_SPECIALISTS_FAST": 0.0,
+        "RIM_ENABLE_DYNAMIC_SPECIALISTS": 0.0,
+        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": 0.0,
+    }
+    total_weight = 0.0
+    quality_sum = 0.0
+    runtime_sum = 0.0
+    failure_sum = 0.0
+    disagreement_sum = 0.0
+    dynamic_sum = 0.0
+    samples: list[dict[str, Any]] = []
+
+    for report in valid_reports:
+        calibration = calibrate_spawn_policy(
+            report,
+            target_quality=target_quality,
+            target_runtime_sec=target_runtime_sec,
+        )
+        env = calibration["recommended_env"]
+        report_quality = float(report.get("average_quality_score", 0.0))
+        report_failure = (
+            float(report.get("failure_count", 0)) / max(1, int(report.get("dataset_size", 1)))
+        )
+        telemetry = calibration.get("inputs", {}).get("telemetry", {})
+        avg_disagreement = _to_float(
+            telemetry.get("avg_disagreement_count") if isinstance(telemetry, dict) else 0.0,
+            0.0,
+        )
+        avg_dynamic = _to_float(
+            telemetry.get("avg_spawn_dynamic_count") if isinstance(telemetry, dict) else 0.0,
+            0.0,
+        )
+        weight = max(0.1, report_quality + 0.15 - (0.25 * report_failure) + (0.05 * avg_disagreement))
+        total_weight += weight
+        quality_sum += report_quality
+        runtime_sum += float(report.get("average_runtime_sec", 0.0))
+        failure_sum += report_failure
+        disagreement_sum += avg_disagreement
+        dynamic_sum += avg_dynamic
+        for key in weighted:
+            weighted[key] += float(env[key]) * weight
+        samples.append(
+            {
+                "created_at": report.get("created_at"),
+                "mode": report.get("mode"),
+                "weight": round(weight, 4),
+                "recommended_env": env,
+            }
+        )
+
+    if total_weight <= 0:
+        total_weight = float(len(valid_reports))
+    policy_env = {
+        "RIM_SPAWN_MIN_ROLE_SCORE": round(
+            _clamp_float(weighted["RIM_SPAWN_MIN_ROLE_SCORE"] / total_weight, 0.4, 2.5),
+            3,
+        ),
+        "RIM_SPAWN_MAX_SPECIALISTS_DEEP": _clamp_int(
+            int(round(weighted["RIM_SPAWN_MAX_SPECIALISTS_DEEP"] / total_weight)),
+            1,
+            8,
+        ),
+        "RIM_SPAWN_MAX_SPECIALISTS_FAST": _clamp_int(
+            int(round(weighted["RIM_SPAWN_MAX_SPECIALISTS_FAST"] / total_weight)),
+            1,
+            4,
+        ),
+        "RIM_ENABLE_DYNAMIC_SPECIALISTS": 1
+        if (weighted["RIM_ENABLE_DYNAMIC_SPECIALISTS"] / total_weight) >= 0.5
+        else 0,
+        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": _clamp_int(
+            int(round(weighted["RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"] / total_weight)),
+            0,
+            6,
+        ),
+    }
+    if policy_env["RIM_ENABLE_DYNAMIC_SPECIALISTS"] == 0:
+        policy_env["RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"] = 0
+    avg_quality = quality_sum / len(valid_reports)
+    avg_runtime = runtime_sum / len(valid_reports)
+    avg_failure = failure_sum / len(valid_reports)
+    avg_disagreement = disagreement_sum / len(valid_reports)
+    avg_dynamic = dynamic_sum / len(valid_reports)
+    rationale = [
+        "Policy aggregates per-report spawn calibration recommendations using weighted averaging.",
+    ]
+    if avg_quality < target_quality:
+        rationale.append("Average quality is below target, so spawn policy keeps broader specialist coverage.")
+    else:
+        rationale.append("Average quality meets target, so spawn policy remains balanced.")
+    if target_runtime_sec is not None and target_runtime_sec > 0 and avg_runtime > target_runtime_sec:
+        rationale.append("Average runtime exceeds target, so spawn breadth is moderated.")
+    if avg_failure > 0.2:
+        rationale.append("Failure rate is elevated; specialist expansion remains conservative.")
+    if avg_disagreement > 0.5 or avg_dynamic > 0.5:
+        rationale.append("Disagreement/dynamic-role pressure supports more adaptive specialist spawning.")
+
+    return {
+        "report_count": len(valid_reports),
+        "policy_env": policy_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": policy_env}),
+        "summary": {
+            "average_quality_score": round(avg_quality, 4),
+            "average_runtime_sec": round(avg_runtime, 4),
+            "average_failure_rate": round(avg_failure, 4),
+            "average_disagreement_count": round(avg_disagreement, 4),
+            "average_spawn_dynamic_count": round(avg_dynamic, 4),
+            "target_quality": target_quality,
+            "target_runtime_sec": target_runtime_sec,
+        },
+        "rationale": rationale,
+        "samples": samples[:20],
+    }
+
+
 def train_depth_policy(
     reports: list[dict[str, Any]],
     *,

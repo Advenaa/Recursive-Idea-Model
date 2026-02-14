@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + specialist-policy increments): `103` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + spawn/specialist-policy increments): `105` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -287,7 +287,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Verification layer:
   deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, and baseline advanced adapters (`solver:`, `simulate:`, `data:`) are implemented, including pluggable external adapter command hooks; formal theorem/constraint tooling and production external integrations are still missing.
 - Specialization layer:
-  domain-specialist spawning and scored heuristic role-selection are implemented (with thresholded specialist budgets, rationale metadata, and heuristic tool-routing contracts), but no learned multi-role agent factory with adaptive tool-routing policies.
+  domain-specialist spawning and scored heuristic role-selection are implemented (with thresholded specialist budgets, rationale metadata, heuristic tool-routing contracts, offline spawn-policy training via `rim eval train-spawn-policy`, and runtime policy loading via `RIM_SPAWN_POLICY_PATH`), but no learned multi-role agent factory with adaptive tool-routing policies.
 
 ### 20.3 Missing / Slacking Against SOTA Paper
 
@@ -300,7 +300,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 
 1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration (`rim eval calibrate` + `rim eval calibrate-loop` implemented; policy-learning automation still pending).
 2. P0: evolve specialist arbitration from current offline-trained policy defaults to online adaptive specialist policy and dynamic role contracts.
-3. P1: add specialization layer with dynamic role/tool selection contracts.
+3. P1: evolve specialization from current offline spawn policy + heuristic dynamic contracts to learned dynamic role/tool selection contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
 5. P2: upgrade memory to episodic/working/tool stores and implement folding triggers.
 6. P3: evolve current offline heuristic policy training (`rim eval train-policy`) to learned policy optimization and credit assignment.

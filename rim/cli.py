@@ -24,6 +24,7 @@ from rim.eval.runner import (
     save_blind_review_packet,
     save_report,
     train_depth_policy,
+    train_spawn_policy,
     train_specialist_arbitration_policy,
 )
 from rim.providers.router import ProviderRouter
@@ -404,6 +405,25 @@ def _cmd_eval_train_specialist_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_eval_train_spawn_policy(args: argparse.Namespace) -> int:
+    report_paths = _resolve_train_policy_reports(args)
+    reports = [load_report(path) for path in report_paths]
+    policy = train_spawn_policy(
+        reports,
+        target_quality=args.target_quality,
+        target_runtime_sec=args.target_runtime_sec,
+    )
+    payload = {
+        "report_count": len(report_paths),
+        "report_paths": [str(path) for path in report_paths],
+        "policy": policy,
+    }
+    if args.save:
+        Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 async def _cmd_eval_calibrate_loop(args: argparse.Namespace) -> int:
     orchestrator = _build_orchestrator()
     dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
@@ -554,6 +574,15 @@ def build_parser() -> argparse.ArgumentParser:
     eval_train_specialist_policy.add_argument("--target-quality", type=float, default=0.65)
     eval_train_specialist_policy.add_argument("--target-runtime-sec", type=float)
     eval_train_specialist_policy.add_argument("--save")
+    eval_train_spawn_policy = eval_sub.add_parser(
+        "train-spawn-policy",
+        help="Train an aggregated spawn policy from benchmark reports",
+    )
+    eval_train_spawn_policy.add_argument("--reports", help="comma-separated report paths")
+    eval_train_spawn_policy.add_argument("--reports-dir")
+    eval_train_spawn_policy.add_argument("--target-quality", type=float, default=0.65)
+    eval_train_spawn_policy.add_argument("--target-runtime-sec", type=float)
+    eval_train_spawn_policy.add_argument("--save")
 
     sub.add_parser("health", help="Healthcheck DB and providers")
     return parser
@@ -598,6 +627,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_train_policy(args))
     if args.command == "eval" and args.eval_command == "train-specialist-policy":
         raise SystemExit(_cmd_eval_train_specialist_policy(args))
+    if args.command == "eval" and args.eval_command == "train-spawn-policy":
+        raise SystemExit(_cmd_eval_train_spawn_policy(args))
     if args.command == "health":
         raise SystemExit(asyncio.run(_cmd_health()))
     raise SystemExit(1)

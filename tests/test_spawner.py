@@ -1,3 +1,5 @@
+import json
+
 from rim.agents.spawner import build_spawn_plan
 
 
@@ -79,3 +81,41 @@ def test_spawn_plan_can_generate_dynamic_specialist_roles(monkeypatch) -> None: 
     assert any(role.startswith("dynamic_") for role in roles)
     dynamic_item = next(item for item in payload["extra_critics"] if item["role"].startswith("dynamic_"))
     assert dynamic_item["tool_contract"]["routing_policy"] == "prioritize_domain_specific_signals"
+
+
+def test_spawn_plan_applies_spawn_policy_file_defaults(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    policy_path = tmp_path / "spawn_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "policy_env": {
+                        "RIM_SPAWN_MIN_ROLE_SCORE": 0.5,
+                        "RIM_SPAWN_MAX_SPECIALISTS_DEEP": 5,
+                        "RIM_ENABLE_DYNAMIC_SPECIALISTS": 1,
+                        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": 3,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RIM_SPAWN_POLICY_PATH", str(policy_path))
+    monkeypatch.delenv("RIM_SPAWN_MIN_ROLE_SCORE", raising=False)
+    monkeypatch.delenv("RIM_SPAWN_MAX_SPECIALISTS_DEEP", raising=False)
+    monkeypatch.delenv("RIM_ENABLE_DYNAMIC_SPECIALISTS", raising=False)
+    monkeypatch.delenv("RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS", raising=False)
+
+    payload = build_spawn_plan(
+        mode="deep",
+        domain="bioinformatics",
+        constraints=[
+            "Need genomics workflow controls and lineage tracking",
+            "Evaluate proteomics risk model",
+        ],
+        memory_context=[],
+    )
+    assert payload["policy_applied"] is True
+    assert payload["policy_path"] == str(policy_path)
+    assert payload["min_role_score"] == 0.5
+    assert payload["selected_count"] <= 5
