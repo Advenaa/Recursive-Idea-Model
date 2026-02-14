@@ -19,6 +19,50 @@ DEFAULT_STAGE_POLICY: dict[str, list[str]] = {
 }
 
 
+def _normalize_determinism_mode(value: str | None) -> str:
+    parsed = str(value or "strict").strip().lower()
+    if parsed in {"off", "strict", "balanced"}:
+        return parsed
+    return "strict"
+
+
+def _parse_int_env(value: str | None, default: int) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _with_determinism_hints(
+    *,
+    stage: str,
+    prompt: str,
+    mode: str,
+    seed: int,
+) -> str:
+    if mode == "off":
+        return prompt
+    if mode == "balanced":
+        rules = [
+            "Favor consistent structure and stable ordering across retries.",
+            "Avoid unnecessary randomness in phrasing and field ordering.",
+        ]
+    else:
+        rules = [
+            "Use deterministic wording and stable ordering.",
+            "If uncertain, choose the most conservative interpretation.",
+            "Avoid introducing random alternatives between retries.",
+        ]
+    header = (
+        f"Determinism policy: {mode}\n"
+        f"Determinism seed: {seed}\n"
+        f"Stage: {stage}\n"
+        "Rules:\n"
+        + "\n".join(f"- {rule}" for rule in rules)
+    )
+    return f"{header}\n\n{prompt}"
+
+
 def _json_repair_prompt(
     *,
     stage: str,
@@ -72,6 +116,8 @@ class ProviderRunSession:
         timeout_sec: int,
         budget: RunBudget,
         json_repair_attempts: int = 1,
+        determinism_mode: str = "strict",
+        determinism_seed: int = 42,
     ) -> None:
         self.run_id = run_id
         self.providers = providers
@@ -79,6 +125,8 @@ class ProviderRunSession:
         self.timeout_sec = timeout_sec
         self.budget = budget
         self.json_repair_attempts = max(0, int(json_repair_attempts))
+        self.determinism_mode = _normalize_determinism_mode(determinism_mode)
+        self.determinism_seed = int(determinism_seed)
         self.usage = RunUsage()
         self.provider_results: list[ProviderResult] = []
 
@@ -156,11 +204,17 @@ class ProviderRunSession:
     async def invoke_text(self, stage: str, prompt: str) -> tuple[str, str]:
         errors: list[str] = []
         config = ProviderConfig(timeout_sec=self.timeout_sec)
+        stage_prompt = _with_determinism_hints(
+            stage=stage,
+            prompt=prompt,
+            mode=self.determinism_mode,
+            seed=self.determinism_seed,
+        )
         for provider_name in self._providers_for_stage(stage):
             self._check_budget_before_call()
             adapter = self.providers[provider_name]
             try:
-                result = await adapter.invoke(prompt, config)
+                result = await adapter.invoke(stage_prompt, config)
                 self._apply_result_to_usage(result)
                 return result.text, provider_name
             except BudgetExceededError:
@@ -179,9 +233,15 @@ class ProviderRunSession:
     ) -> tuple[dict[str, Any], str]:
         errors: list[str] = []
         config = ProviderConfig(timeout_sec=self.timeout_sec)
+        stage_prompt = _with_determinism_hints(
+            stage=stage,
+            prompt=prompt,
+            mode=self.determinism_mode,
+            seed=self.determinism_seed,
+        )
         for provider_name in self._providers_for_stage(stage):
             adapter = self.providers[provider_name]
-            attempt_prompt = prompt
+            attempt_prompt = stage_prompt
             for attempt in range(self.json_repair_attempts + 1):
                 self._check_budget_before_call()
                 try:
@@ -204,7 +264,7 @@ class ProviderRunSession:
                     if attempt < self.json_repair_attempts:
                         attempt_prompt = _json_repair_prompt(
                             stage=stage,
-                            original_prompt=prompt,
+                            original_prompt=stage_prompt,
                             error=str(exc),
                         )
                         continue
@@ -229,6 +289,13 @@ class ProviderRouter:
             max_estimated_cost_usd=float(os.getenv("RIM_RUN_MAX_ESTIMATED_COST_USD", "10.0")),
         )
         self.default_json_repair_attempts = int(os.getenv("RIM_JSON_REPAIR_RETRIES", "1"))
+        self.default_determinism_mode = _normalize_determinism_mode(
+            os.getenv("RIM_DETERMINISM_MODE", "strict")
+        )
+        self.default_determinism_seed = _parse_int_env(
+            os.getenv("RIM_DETERMINISM_SEED"),
+            42,
+        )
 
     async def healthcheck(self) -> dict[str, bool]:
         return {
@@ -244,6 +311,8 @@ class ProviderRouter:
             timeout_sec=self.default_timeout_sec,
             budget=self.default_budget,
             json_repair_attempts=self.default_json_repair_attempts,
+            determinism_mode=self.default_determinism_mode,
+            determinism_seed=self.default_determinism_seed,
         )
 
     async def invoke_text(self, stage: str, prompt: str) -> tuple[str, str]:

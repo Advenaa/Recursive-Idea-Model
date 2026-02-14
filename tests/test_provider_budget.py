@@ -89,6 +89,26 @@ class SuccessJsonAdapter:
         )
 
 
+class CapturePromptJsonAdapter:
+    def __init__(self) -> None:
+        self.last_prompt = ""
+
+    async def invoke_json_with_result(self, prompt, config, json_schema=None):  # noqa: ANN001, ANN201
+        self.last_prompt = prompt
+        return (
+            {"ok": True},
+            ProviderResult(
+                text='{"ok": true}',
+                raw_output='{"ok": true}',
+                latency_ms=2,
+                estimated_tokens_in=1,
+                estimated_tokens_out=1,
+                provider="codex",
+                exit_code=0,
+            ),
+        )
+
+
 def test_run_budget_enforced() -> None:
     session = ProviderRunSession(
         run_id="run-1",
@@ -156,3 +176,49 @@ def test_json_fallback_after_repair_exhausted() -> None:
     assert provider == "claude"
     assert failing.calls == 2
     assert backup.calls == 1
+
+
+def test_determinism_hints_added_to_prompt() -> None:
+    adapter = CapturePromptJsonAdapter()
+    session = ProviderRunSession(
+        run_id="run-4",
+        providers={"codex": adapter},
+        stage_policy={"decompose": ["codex"]},
+        timeout_sec=60,
+        budget=RunBudget(
+            max_calls=10,
+            max_latency_ms=1000,
+            max_tokens=1000,
+            max_estimated_cost_usd=10.0,
+        ),
+        determinism_mode="strict",
+        determinism_seed=7,
+    )
+    payload, provider = asyncio.run(session.invoke_json("decompose", "root prompt"))
+    assert payload["ok"] is True
+    assert provider == "codex"
+    assert "Determinism policy: strict" in adapter.last_prompt
+    assert "Determinism seed: 7" in adapter.last_prompt
+    assert adapter.last_prompt.endswith("root prompt")
+
+
+def test_determinism_off_leaves_prompt_unchanged() -> None:
+    adapter = CapturePromptJsonAdapter()
+    session = ProviderRunSession(
+        run_id="run-5",
+        providers={"codex": adapter},
+        stage_policy={"decompose": ["codex"]},
+        timeout_sec=60,
+        budget=RunBudget(
+            max_calls=10,
+            max_latency_ms=1000,
+            max_tokens=1000,
+            max_estimated_cost_usd=10.0,
+        ),
+        determinism_mode="off",
+        determinism_seed=99,
+    )
+    payload, provider = asyncio.run(session.invoke_json("decompose", "root prompt"))
+    assert payload["ok"] is True
+    assert provider == "codex"
+    assert adapter.last_prompt == "root prompt"
