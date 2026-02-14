@@ -149,7 +149,15 @@ export RIM_ENABLE_MEMORY_FOLDING=1
 export RIM_MEMORY_FOLD_MAX_ENTRIES=12
 export RIM_ENABLE_DISAGREEMENT_ARBITRATION=1
 export RIM_ARBITRATION_MAX_JOBS=2
+export RIM_ENABLE_EXECUTABLE_VERIFICATION=1
+export RIM_EXEC_VERIFY_MAX_CHECKS=5
 ```
+
+Executable verification constraint format:
+
+- Prefix constraint with `python:` / `py:` / `assert:` to run a safe expression check.
+- Available variables in expressions: `confidence_score`, `change_count`, `risk_count`, `experiment_count`, `finding_count`, `high_finding_count`, `critical_finding_count`.
+- Example: `python: confidence_score >= 0.7 and risk_count <= 2`
 
 Self-iteration loop:
 

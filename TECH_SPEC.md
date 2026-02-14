@@ -140,6 +140,8 @@ Environment variables:
 32. `RIM_MEMORY_FOLD_MAX_ENTRIES` default `12` (max folded context entries carried to next cycle)
 33. `RIM_ENABLE_DISAGREEMENT_ARBITRATION` default `1` in deep mode (resolve critique disagreements before synthesis)
 34. `RIM_ARBITRATION_MAX_JOBS` default `2` (max disagreement arbitration calls per cycle)
+35. `RIM_ENABLE_EXECUTABLE_VERIFICATION` default `1` in deep mode (run safe executable checks from prefixed constraints)
+36. `RIM_EXEC_VERIFY_MAX_CHECKS` default `5` (max executable constraint checks per cycle)
 
 ## 5) Modes and Runtime Controls
 
@@ -371,12 +373,13 @@ Additional eval commands:
 6. `challenge_arbitration` (optional disagreement resolution calls)
 7. `synthesis` (cycle N)
 8. `verification` (deterministic constraint/risk coverage checks)
-9. `depth_allocator` (decide recurse or stop)
-10. `memory_fold` (when recursing; compact episodic/working/tool summaries)
-11. Repeat steps 3-10 while recursion decision is true and cycle budget remains
-12. `memory_write`
-13. `provider_budget`
-14. `finalize`
+9. `verification_executable` (safe expression checks for prefixed executable constraints)
+10. `depth_allocator` (decide recurse or stop)
+11. `memory_fold` (when recursing; compact episodic/working/tool summaries)
+12. Repeat steps 3-11 while recursion decision is true and cycle budget remains
+13. `memory_write`
+14. `provider_budget`
+15. `finalize`
 
 ### 9.2 Parallel Challenge
 
@@ -385,6 +388,20 @@ Additional eval commands:
 3. Validate each critic output against schema.
 4. Retry invalid responses once with stricter prompt.
 5. Persist findings incrementally.
+
+### 9.3 Executable Verification
+
+1. Constraints prefixed with `python:`, `py:`, or `assert:` are treated as executable checks.
+2. Checks are evaluated with a safe expression evaluator (no function calls, attribute access, or imports).
+3. Supported context variables:
+   - `confidence_score`
+   - `change_count`
+   - `risk_count`
+   - `experiment_count`
+   - `finding_count`
+   - `high_finding_count`
+   - `critical_finding_count`
+4. Failed executable checks are logged and converted into residual risks with confidence penalty.
 
 ## 10) Prompt and Schema Discipline
 

@@ -280,14 +280,14 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Challenge reconciliation:
   consensus/disagreement aggregation and disagreement arbitration are implemented, but there is no devil's-advocate respawn or specialist multi-round arbitration loop.
 - Verification layer:
-  deterministic post-synthesis checks (constraint/risk coverage) are implemented, but no executable theorem/solver/simulation verification loop yet.
+  deterministic post-synthesis checks and safe executable constraint verification are implemented, but no theorem/solver/simulation/data-backed verification loop yet.
 - Specialization layer:
   domain-specialist critic spawning is implemented at prompt/stage level, but no dynamic multi-role agent factory with tool-routing policies.
 
 ### 20.3 Missing / Slacking Against SOTA Paper
 
 - Dynamic agent spawning and specialization (AgentSpawner-style role/tool creation at runtime).
-- Neuro-symbolic verification loops (formal claim testing, executable checks, theorem/constraint tooling).
+- Full neuro-symbolic verification loops (formal theorem/constraint tooling, simulation, and external data-backed execution).
 - Advanced memory folding policy (context degradation detection, versioned folds, and long-horizon memory quality controls).
 - RL-based orchestration training (PARL/ARPO/AEPO-style policy optimization and credit assignment).
 
@@ -296,7 +296,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration.
 2. P0: extend critique reconciliation from aggregation to active disagreement arbitration and diversity guardrails.
 3. P1: add specialization layer with dynamic role/tool selection contracts.
-4. P1: add verification adapters for code execution and structured factual/constraint checks.
+4. P1: add advanced verification adapters (solver/simulation/data-tool execution beyond safe local expression checks).
 5. P2: upgrade memory to episodic/working/tool stores and implement folding triggers.
 6. P3: add offline orchestration training pipeline for policy learning and credit assignment.
 

@@ -8,6 +8,7 @@ from uuid import uuid4
 from rim.agents.critics import run_critics
 from rim.agents.decomposer import decompose_idea
 from rim.agents.arbitrator import run_arbitration
+from rim.agents.executable_verifier import run_executable_verification
 from rim.agents.reconciliation import reconcile_findings
 from rim.agents.synthesizer import synthesize_idea
 from rim.agents.verification import verify_synthesis
@@ -291,6 +292,16 @@ class RimOrchestrator:
                 lower=0.0,
                 upper=1.0,
             )
+            executable_verification_enabled = _parse_bool_env(
+                "RIM_ENABLE_EXECUTABLE_VERIFICATION",
+                request.mode == "deep",
+            )
+            executable_verification_max_checks = _parse_int_env(
+                "RIM_EXEC_VERIFY_MAX_CHECKS",
+                5,
+                lower=1,
+                upper=20,
+            )
             enable_memory_folding = _parse_bool_env(
                 "RIM_ENABLE_MEMORY_FOLDING",
                 request.mode == "deep",
@@ -508,6 +519,45 @@ class RimOrchestrator:
                             ),
                         )
                         synthesis["confidence_score"] = adjusted_confidence
+
+                if executable_verification_enabled:
+                    exec_verification = run_executable_verification(
+                        constraints=request.constraints,
+                        synthesis=synthesis,
+                        findings=findings,
+                        max_checks=executable_verification_max_checks,
+                    )
+                    self.repository.log_stage(
+                        run_id=run_id,
+                        stage="verification_executable",
+                        status="completed",
+                        meta={"cycle": cycle, **exec_verification["summary"]},
+                    )
+                    failed_exec_checks = [
+                        check
+                        for check in list(exec_verification.get("checks") or [])
+                        if not bool(check.get("passed"))
+                    ]
+                    if failed_exec_checks:
+                        risks = [
+                            str(item)
+                            for item in list(synthesis.get("residual_risks") or [])
+                            if str(item).strip()
+                        ]
+                        for check in failed_exec_checks[:3]:
+                            expression = str(check.get("expression") or "unknown expression").strip()
+                            message = f"Executable verification failed: {expression}"
+                            if message not in risks:
+                                risks.append(message)
+                        synthesis["residual_risks"] = risks[:8]
+                        synthesis["confidence_score"] = max(
+                            0.0,
+                            min(
+                                1.0,
+                                float(synthesis.get("confidence_score", 0.5))
+                                - min(0.4, 0.08 * len(failed_exec_checks)),
+                            ),
+                        )
 
                 high_findings, critical_findings = severity_counts(findings)
                 decision = decide_next_cycle(
