@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import os
 from typing import Any
@@ -6,6 +8,17 @@ from uuid import uuid4
 from rim.core.modes import ModeSettings
 from rim.core.schemas import CriticFinding, DecompositionNode
 from rim.providers.router import ProviderRouter
+
+CRITIC_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "issue": {"type": "string"},
+        "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "suggested_fix": {"type": "string"},
+    },
+    "required": ["issue", "severity", "confidence", "suggested_fix"],
+}
 
 CRITIC_PROMPT = """You are the {critic_type} critic for one idea component.
 Return STRICT JSON only with:
@@ -82,7 +95,11 @@ async def run_critics(
         )
         async with semaphore:
             try:
-                payload, provider = await router.invoke_json(stage, prompt)
+                payload, provider = await router.invoke_json(
+                    stage,
+                    prompt,
+                    json_schema=CRITIC_SCHEMA,
+                )
                 findings.append(_make_finding(node, critic_type, provider, payload))
             except Exception:  # noqa: BLE001
                 findings.append(

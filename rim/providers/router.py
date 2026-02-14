@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from typing import Any
 
@@ -48,13 +50,22 @@ class ProviderRouter:
             f"All providers failed for stage '{stage}'. " + "; ".join(errors)
         )
 
-    async def invoke_json(self, stage: str, prompt: str) -> tuple[dict[str, Any], str]:
+    async def invoke_json(
+        self,
+        stage: str,
+        prompt: str,
+        json_schema: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], str]:
         errors: list[str] = []
         config = ProviderConfig(timeout_sec=self.default_timeout_sec)
         for provider_name in self._providers_for_stage(stage):
             adapter = self.providers[provider_name]
             try:
-                result = await adapter.invoke_json(prompt, config)
+                result = await adapter.invoke_json(
+                    prompt,
+                    config,
+                    json_schema=json_schema,
+                )
                 return result, provider_name
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{provider_name}: {exc}")

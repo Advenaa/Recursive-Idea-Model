@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from uuid import uuid4
 
 from rim.agents.critics import run_critics
@@ -14,10 +16,13 @@ class RimOrchestrator:
         self.repository = repository
         self.router = router
 
-    async def analyze(self, request: AnalyzeRequest) -> AnalyzeResult:
+    def create_run(self, request: AnalyzeRequest) -> str:
         run_id = str(uuid4())
-        settings = get_mode_settings(request.mode)
         self.repository.create_run(run_id, request.mode, request.idea)
+        return run_id
+
+    async def execute_run(self, run_id: str, request: AnalyzeRequest) -> AnalyzeResult:
+        settings = get_mode_settings(request.mode)
 
         try:
             nodes, decompose_provider = await decompose_idea(
@@ -97,6 +102,10 @@ class RimOrchestrator:
                 meta={"error": str(exc)},
             )
             raise
+
+    async def analyze(self, request: AnalyzeRequest) -> AnalyzeResult:
+        run_id = self.create_run(request)
+        return await self.execute_run(run_id, request)
 
     def get_run(self, run_id: str) -> AnalyzeRunResponse | None:
         payload = self.repository.get_run(run_id)

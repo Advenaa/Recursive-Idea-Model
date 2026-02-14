@@ -1,0 +1,10 @@
+{"id":"biz-01","domain":"business","idea":"Create an AI-powered personal CFO service for freelancers with dynamic tax forecasting.","desired_outcome":"Find a viable go-to-market strategy and risk profile."}
+{"id":"biz-02","domain":"business","idea":"Launch a niche marketplace for second-hand EV batteries with quality certification.","desired_outcome":"Test feasibility and key failure points."}
+{"id":"prod-01","domain":"product","idea":"Build a note-taking app that automatically converts meeting transcripts into project tasks.","desired_outcome":"Identify differentiation and execution risks."}
+{"id":"prod-02","domain":"product","idea":"Design a browser extension that detects manipulative pricing patterns in ecommerce.","desired_outcome":"Clarify legal and product constraints."}
+{"id":"research-01","domain":"research","idea":"Use recursive agent-based literature synthesis to map contradictions in climate adaptation research.","desired_outcome":"Define methodological weaknesses and stronger pipeline design."}
+{"id":"research-02","domain":"research","idea":"Create a framework to evaluate safety claims of autonomous coding agents using adversarial testing.","desired_outcome":"Generate a robust evaluation plan."}
+{"id":"ops-01","domain":"operations","idea":"Implement a company-wide decision log that links assumptions to outcomes for continuous learning.","desired_outcome":"Assess organizational adoption risks."}
+{"id":"ops-02","domain":"operations","idea":"Use AI to auto-prioritize incident response playbooks based on live telemetry.","desired_outcome":"Surface reliability and governance tradeoffs."}
+{"id":"policy-01","domain":"policy","idea":"Propose a municipal policy that rewards low-emission delivery fleets via dynamic toll discounts.","desired_outcome":"Stress-test policy assumptions and side effects."}
+{"id":"edu-01","domain":"education","idea":"Create a tutoring system that adapts teaching style based on student frustration signals.","desired_outcome":"Find ethical and implementation risks."}

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -5,6 +7,7 @@ from pathlib import Path
 
 from rim.core.orchestrator import RimOrchestrator
 from rim.core.schemas import AnalyzeRequest
+from rim.eval.runner import DEFAULT_DATASET_PATH, run_benchmark
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
 
@@ -61,6 +64,21 @@ async def _cmd_health() -> int:
     return 0
 
 
+async def _cmd_eval_run(args: argparse.Namespace) -> int:
+    orchestrator = _build_orchestrator()
+    dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
+    report = await run_benchmark(
+        orchestrator=orchestrator,
+        dataset_path=dataset,
+        mode=args.mode,
+        limit=args.limit,
+    )
+    if args.save:
+        Path(args.save).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rim")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -79,6 +97,14 @@ def build_parser() -> argparse.ArgumentParser:
     run_show = run_sub.add_parser("show", help="Show run details")
     run_show.add_argument("run_id")
 
+    eval_parser = sub.add_parser("eval", help="Benchmark and scoring")
+    eval_sub = eval_parser.add_subparsers(dest="eval_command", required=True)
+    eval_run = eval_sub.add_parser("run", help="Run benchmark dataset")
+    eval_run.add_argument("--dataset")
+    eval_run.add_argument("--mode", choices=["deep", "fast"], default="deep")
+    eval_run.add_argument("--limit", type=int)
+    eval_run.add_argument("--save")
+
     sub.add_parser("health", help="Healthcheck DB and providers")
     return parser
 
@@ -90,6 +116,8 @@ def main() -> None:
         raise SystemExit(asyncio.run(_cmd_analyze(args)))
     if args.command == "run" and args.run_command == "show":
         raise SystemExit(_cmd_run_show(args))
+    if args.command == "eval" and args.eval_command == "run":
+        raise SystemExit(asyncio.run(_cmd_eval_run(args)))
     if args.command == "health":
         raise SystemExit(asyncio.run(_cmd_health()))
     raise SystemExit(1)

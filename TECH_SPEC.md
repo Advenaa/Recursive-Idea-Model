@@ -87,7 +87,7 @@ Fallback policy:
 Each provider adapter must implement:
 
 1. `invoke(prompt: str, config: ProviderConfig) -> ProviderResult`
-2. `invoke_json(schema: dict, prompt: str, config: ProviderConfig) -> dict`
+2. `invoke_json(prompt: str, config: ProviderConfig, json_schema?: dict) -> dict`
 3. `healthcheck() -> bool`
 
 `ProviderResult` fields:
@@ -108,8 +108,10 @@ Environment variables:
 
 1. `RIM_CODEX_CMD` default `codex`
 2. `RIM_CLAUDE_CMD` default `claude`
-3. `RIM_PROVIDER_TIMEOUT_SEC` default `180`
-4. `RIM_MAX_PARALLEL_CRITICS` default `6`
+3. `RIM_CODEX_ARGS` default `exec --skip-git-repo-check --sandbox read-only`
+4. `RIM_CLAUDE_ARGS` default `-p --output-format json`
+5. `RIM_PROVIDER_TIMEOUT_SEC` default `180`
+6. `RIM_MAX_PARALLEL_CRITICS` default `6`
 
 ## 5) Modes and Runtime Controls
 
@@ -220,8 +222,9 @@ Request JSON:
 Behavior:
 
 1. Creates a run.
-2. Executes full pipeline.
-3. Returns output contract.
+2. Starts pipeline execution in background by default.
+3. Returns `{ run_id, status }` with HTTP 202 when `wait=false`.
+4. When `wait=true`, blocks until completion and returns full run payload.
 
 ### 7.2 `GET /runs/{run_id}`
 
@@ -257,6 +260,10 @@ Flags:
 ### 8.3 Healthcheck
 
 `rim health`
+
+### 8.4 Benchmark
+
+`rim eval run --mode deep --limit 10 --save report.json`
 
 ## 9) Orchestration Logic
 
@@ -377,9 +384,9 @@ RIM/
 
 ## 16) Acceptance Criteria
 
-1. `POST /analyze` returns PRD output contract for valid inputs.
-2. Deep mode is default in both API and CLI paths.
-3. Both `codex` and `claude` CLI adapters are implemented and health-checkable.
-4. Failure of one provider can fall back to the other for at least one retry.
-5. Run artifacts are persisted and retrievable via `GET /runs/{run_id}`.
-
+1. `POST /analyze` starts non-blocking run creation and returns `run_id`.
+2. `POST /analyze?wait=true` returns completed run payload for valid inputs.
+3. Deep mode is default in both API and CLI paths.
+4. Both `codex` and `claude` CLI adapters are implemented and health-checkable.
+5. Failure of one provider can fall back to the other for at least one retry.
+6. Run artifacts are persisted and retrievable via `GET /runs/{run_id}`.

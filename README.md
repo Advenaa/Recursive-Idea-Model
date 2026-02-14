@@ -34,6 +34,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - Orchestrator pipeline (`rim/core/orchestrator.py`)
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
 - SQLite persistence (`rim/storage/`)
+- Benchmark runner + dataset (`rim/eval/`)
 - Local CLI entrypoint (`rim/cli.py`)
 
 Quickstart:
@@ -50,11 +51,39 @@ Run API:
 uvicorn rim.api.app:app --reload
 ```
 
+API usage (non-blocking by default):
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{"idea":"Build an AI CFO for freelancers","mode":"deep"}'
+
+curl -s "http://127.0.0.1:8000/runs/<run_id>"
+```
+
+API usage (blocking for one call):
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/analyze?wait=true" \
+  -H "Content-Type: application/json" \
+  -d '{"idea":"Build an AI CFO for freelancers","mode":"deep"}'
+```
+
 Run CLI:
 
 ```bash
 rim health
 rim analyze --idea "Your idea here" --mode deep --json
+rim eval run --mode deep --limit 3
+```
+
+Provider env vars:
+
+```bash
+export RIM_CODEX_CMD=codex
+export RIM_CODEX_ARGS="exec --skip-git-repo-check --sandbox read-only"
+export RIM_CLAUDE_CMD=claude
+export RIM_CLAUDE_ARGS="-p --output-format json"
 ```
 
 ## Papers

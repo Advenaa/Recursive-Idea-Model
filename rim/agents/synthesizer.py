@@ -1,8 +1,37 @@
+from __future__ import annotations
+
 from typing import Any
 
 from rim.core.modes import ModeSettings
 from rim.core.schemas import CriticFinding, DecompositionNode
 from rim.providers.router import ProviderRouter
+
+SYNTHESIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "synthesized_idea": {"type": "string"},
+        "changes_summary": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "residual_risks": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "next_experiments": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "confidence_score": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": [
+        "synthesized_idea",
+        "changes_summary",
+        "residual_risks",
+        "next_experiments",
+        "confidence_score",
+    ],
+}
 
 SYNTHESIZE_PROMPT = """You are a synthesis engine for Recursive Idea Model.
 Return STRICT JSON only:
@@ -93,7 +122,9 @@ async def synthesize_idea(
         findings=finding_view,
     )
     primary_payload, primary_provider = await router.invoke_json(
-        "synthesize_primary", prompt
+        "synthesize_primary",
+        prompt,
+        json_schema=SYNTHESIS_SCHEMA,
     )
     synthesis = _normalize_synthesis(primary_payload, idea)
     providers = [primary_provider]
@@ -107,6 +138,7 @@ async def synthesize_idea(
         refined_payload, refined_provider = await router.invoke_json(
             "synthesize_refine",
             refine_prompt,
+            json_schema=SYNTHESIS_SCHEMA,
         )
         synthesis = _normalize_synthesis(refined_payload, idea)
         providers.append(refined_provider)

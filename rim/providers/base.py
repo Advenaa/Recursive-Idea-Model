@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -56,7 +58,12 @@ class ProviderAdapter(ABC):
     async def invoke(self, prompt: str, config: ProviderConfig) -> ProviderResult:
         raise NotImplementedError
 
-    async def invoke_json(self, prompt: str, config: ProviderConfig) -> dict[str, Any]:
+    async def invoke_json(
+        self,
+        prompt: str,
+        config: ProviderConfig,
+        json_schema: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         result = await self.invoke(prompt, config)
         blob = extract_json_blob(result.text)
         return json.loads(blob)

@@ -1,9 +1,35 @@
+from __future__ import annotations
+
 from typing import Any
 from uuid import uuid4
 
 from rim.core.modes import ModeSettings
 from rim.core.schemas import DecompositionNode
 from rim.providers.router import ProviderRouter
+
+DECOMPOSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "nodes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "parent_node_id": {"type": ["string", "null"]},
+                    "depth": {"type": "integer", "minimum": 0},
+                    "component_text": {"type": "string"},
+                    "node_type": {
+                        "type": "string",
+                        "enum": ["claim", "assumption", "dependency"],
+                    },
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["depth", "component_text", "node_type", "confidence"],
+            },
+        }
+    },
+    "required": ["nodes"],
+}
 
 DECOMPOSE_PROMPT = """You are a rigorous idea decomposition engine.
 Return STRICT JSON only with this schema:
@@ -69,7 +95,11 @@ async def decompose_idea(
         domain=domain or "general",
         constraints=", ".join(constraints) if constraints else "none",
     )
-    payload, provider = await router.invoke_json("decompose", prompt)
+    payload, provider = await router.invoke_json(
+        "decompose",
+        prompt,
+        json_schema=DECOMPOSE_SCHEMA,
+    )
     raw_nodes = payload.get("nodes") if isinstance(payload, dict) else None
     if not isinstance(raw_nodes, list) or not raw_nodes:
         return [
