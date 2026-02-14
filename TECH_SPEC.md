@@ -132,9 +132,10 @@ Environment variables:
 24. `RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS` default `1` (high-severity finding tolerance before recurse)
 25. `RIM_RECONCILE_CONSENSUS_MIN_AGENTS` default `3` (minimum distinct critic roles to mark consensus flaw)
 26. `RIM_RECONCILE_CONSENSUS_MIN_CONFIDENCE` default `0.7` (minimum average confidence for consensus flaw)
-27. `RIM_ENABLE_VERIFICATION` default `1` in deep mode, `0` in fast mode (deterministic post-synthesis checks)
-28. `RIM_VERIFY_MIN_CONSTRAINT_OVERLAP` default `0.6` (minimum lexical overlap for constraint coverage)
-29. `RIM_VERIFY_MIN_FINDING_OVERLAP` default `0.35` (minimum lexical overlap for high-risk finding coverage)
+27. `RIM_ENABLE_DOMAIN_CRITIC` default `1` (append one domain-specialist critic stage when domain is provided)
+28. `RIM_ENABLE_VERIFICATION` default `1` in deep mode, `0` in fast mode (deterministic post-synthesis checks)
+29. `RIM_VERIFY_MIN_CONSTRAINT_OVERLAP` default `0.6` (minimum lexical overlap for constraint coverage)
+30. `RIM_VERIFY_MIN_FINDING_OVERLAP` default `0.35` (minimum lexical overlap for high-risk finding coverage)
 
 ## 5) Modes and Runtime Controls
 

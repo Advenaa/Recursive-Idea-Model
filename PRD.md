@@ -281,6 +281,8 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
   basic consensus/disagreement aggregation is implemented, but there is no explicit devil's-advocate respawn or specialist arbitration sub-agent loop.
 - Verification layer:
   deterministic post-synthesis checks (constraint/risk coverage) are implemented, but no executable theorem/solver/simulation verification loop yet.
+- Specialization layer:
+  domain-specialist critic spawning is implemented at prompt/stage level, but no dynamic multi-role agent factory with tool-routing policies.
 
 ### 20.3 Missing / Slacking Against SOTA Paper
 

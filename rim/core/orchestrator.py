@@ -345,7 +345,12 @@ class RimOrchestrator:
                 )
 
                 challenge_started = time.perf_counter()
-                findings = await run_critics(provider_session, nodes, settings)
+                findings = await run_critics(
+                    provider_session,
+                    nodes,
+                    settings,
+                    domain=request.domain,
+                )
                 self.repository.log_stage(
                     run_id=run_id,
                     stage="challenge_parallel",
