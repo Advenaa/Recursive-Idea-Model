@@ -26,6 +26,37 @@ The project default is **Deep mode**.
 - `PRD.md` - Product Requirements Document for RIM MVP (Deep mode default)
 - `TECH_SPEC.md` - Technical implementation spec (Codex CLI + Claude CLI execution)
 
+## MVP Scaffold
+
+The repository now includes a Python MVP scaffold under `rim/` with:
+
+- FastAPI service (`rim/api/app.py`)
+- Orchestrator pipeline (`rim/core/orchestrator.py`)
+- Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
+- SQLite persistence (`rim/storage/`)
+- Local CLI entrypoint (`rim/cli.py`)
+
+Quickstart:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+Run API:
+
+```bash
+uvicorn rim.api.app:app --reload
+```
+
+Run CLI:
+
+```bash
+rim health
+rim analyze --idea "Your idea here" --mode deep --json
+```
+
 ## Papers
 
 ### Main (SOTA)

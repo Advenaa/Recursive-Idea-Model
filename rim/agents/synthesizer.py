@@ -1,0 +1,114 @@
+from typing import Any
+
+from rim.core.modes import ModeSettings
+from rim.core.schemas import CriticFinding, DecompositionNode
+from rim.providers.router import ProviderRouter
+
+SYNTHESIZE_PROMPT = """You are a synthesis engine for Recursive Idea Model.
+Return STRICT JSON only:
+{
+  "synthesized_idea": "string",
+  "changes_summary": ["string"],
+  "residual_risks": ["string"],
+  "next_experiments": ["string"],
+  "confidence_score": 0.0
+}
+
+Original idea:
+{idea}
+
+Decomposition nodes:
+{nodes}
+
+Critic findings:
+{findings}
+"""
+
+REFINE_PROMPT = """Refine the synthesis output for clarity and rigor.
+Return STRICT JSON with the same schema as before.
+
+Original idea:
+{idea}
+
+Current synthesis:
+{synthesis}
+
+Top findings:
+{findings}
+"""
+
+
+def _clean_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _normalize_synthesis(payload: dict[str, Any], idea: str) -> dict[str, Any]:
+    synthesized_idea = str(payload.get("synthesized_idea", "")).strip() or idea
+    changes = _clean_list(payload.get("changes_summary"))[:8]
+    risks = _clean_list(payload.get("residual_risks"))[:8]
+    experiments = _clean_list(payload.get("next_experiments"))[:8]
+    confidence = float(payload.get("confidence_score", 0.5))
+    confidence = max(0.0, min(1.0, confidence))
+    return {
+        "synthesized_idea": synthesized_idea,
+        "changes_summary": changes,
+        "residual_risks": risks,
+        "next_experiments": experiments,
+        "confidence_score": confidence,
+    }
+
+
+async def synthesize_idea(
+    router: ProviderRouter,
+    idea: str,
+    nodes: list[DecompositionNode],
+    findings: list[CriticFinding],
+    settings: ModeSettings,
+) -> tuple[dict[str, Any], list[str]]:
+    node_view = [
+        {
+            "id": node.id,
+            "depth": node.depth,
+            "node_type": node.node_type,
+            "component_text": node.component_text,
+        }
+        for node in nodes
+    ]
+    finding_view = [
+        {
+            "node_id": finding.node_id,
+            "critic_type": finding.critic_type,
+            "severity": finding.severity,
+            "issue": finding.issue,
+            "suggested_fix": finding.suggested_fix,
+        }
+        for finding in findings
+    ]
+
+    prompt = SYNTHESIZE_PROMPT.format(
+        idea=idea,
+        nodes=node_view,
+        findings=finding_view,
+    )
+    primary_payload, primary_provider = await router.invoke_json(
+        "synthesize_primary", prompt
+    )
+    synthesis = _normalize_synthesis(primary_payload, idea)
+    providers = [primary_provider]
+
+    if settings.self_critique_pass and settings.synthesis_passes > 1:
+        refine_prompt = REFINE_PROMPT.format(
+            idea=idea,
+            synthesis=synthesis,
+            findings=finding_view[:12],
+        )
+        refined_payload, refined_provider = await router.invoke_json(
+            "synthesize_refine",
+            refine_prompt,
+        )
+        synthesis = _normalize_synthesis(refined_payload, idea)
+        providers.append(refined_provider)
+
+    return synthesis, providers

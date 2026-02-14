@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rim-mvp"
+version = "0.1.0"
+description = "Recursive Idea Model MVP scaffold"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.111.0",
+  "uvicorn>=0.30.0",
+  "pydantic>=2.7.0",
+]
+
+[project.scripts]
+rim = "rim.cli:main"
+
+[tool.setuptools]
+packages = [
+  "rim",
+  "rim.api",
+  "rim.core",
+  "rim.agents",
+  "rim.providers",
+  "rim.storage",
+  "rim.eval",
+]
