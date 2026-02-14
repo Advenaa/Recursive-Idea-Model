@@ -154,6 +154,12 @@ Environment variables:
 46. `RIM_EXEC_VERIFY_MAX_CHECKS` default `5` (max executable constraint checks per cycle)
 47. `RIM_ENABLE_PYTHON_EXEC_CHECKS` default `0` (allow `python_exec:` subprocess checks)
 48. `RIM_PYTHON_EXEC_TIMEOUT_SEC` default `2` (timeout per `python_exec:` check)
+49. `RIM_ENABLE_ADVANCED_VERIFICATION` default `1` in deep mode (run solver/simulation/data-backed verification)
+50. `RIM_ADV_VERIFY_MAX_CHECKS` default `4` (max advanced verification checks per cycle)
+51. `RIM_ADV_VERIFY_SIMULATION_TRIALS` default `200` (Monte Carlo samples per simulation check)
+52. `RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE` default `0.7` (minimum simulation pass-rate threshold)
+53. `RIM_ADV_VERIFY_SIMULATION_SEED` default `42` (deterministic simulation seed)
+54. `RIM_ADV_VERIFY_DATA_PATH` default `rim/eval/data/benchmark_ideas.jsonl` (local reference dataset path for `data:` checks)
 
 ## 5) Modes and Runtime Controls
 
@@ -409,12 +415,13 @@ Additional eval commands:
 8. `synthesis` (cycle N)
 9. `verification` (deterministic constraint/risk coverage checks)
 10. `verification_executable` (safe expression checks for prefixed executable constraints)
-11. `depth_allocator` (decide recurse or stop)
-12. `memory_fold` (when recursing; compact episodic/working/tool summaries)
-13. Repeat steps 4-12 while recursion decision is true and cycle budget remains
-14. `memory_write`
-15. `provider_budget`
-16. `finalize`
+11. `verification_advanced` (solver/simulation/data-reference checks)
+12. `depth_allocator` (decide recurse or stop)
+13. `memory_fold` (when recursing; compact episodic/working/tool summaries)
+14. Repeat steps 4-13 while recursion decision is true and cycle budget remains
+15. `memory_write`
+16. `provider_budget`
+17. `finalize`
 
 ### 9.2 Parallel Challenge
 

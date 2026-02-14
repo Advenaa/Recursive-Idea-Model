@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 run-controls + eval increments): `77` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + advanced verification increments): `87` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -285,7 +285,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Challenge reconciliation:
   consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, and baseline role-diversity guardrails are implemented; specialist adaptive arbitration loops are still missing.
 - Verification layer:
-  deterministic post-synthesis checks, safe executable expressions, and optional timed `python_exec` checks are implemented, but no theorem/solver/simulation/data-backed verification loop yet.
+  deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, and baseline advanced adapters (`solver:`, `simulate:`, `data:`) are implemented, but no formal theorem/constraint tooling or external simulation/data integrations yet.
 - Specialization layer:
   domain-specialist spawning and scored heuristic role-selection are implemented (with thresholded specialist budgets and rationale metadata), but no learned multi-role agent factory with tool-routing policies.
 
@@ -301,7 +301,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration.
 2. P0: extend critique reconciliation from baseline role-diversity guardrails to specialist adaptive arbitration loops.
 3. P1: add specialization layer with dynamic role/tool selection contracts.
-4. P1: add advanced verification adapters (solver/simulation/data-tool execution beyond safe local expression checks).
+4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
 5. P2: upgrade memory to episodic/working/tool stores and implement folding triggers.
 6. P3: add offline orchestration training pipeline for policy learning and credit assignment.
 

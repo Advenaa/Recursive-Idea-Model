@@ -9,6 +9,7 @@ from rim.agents.critics import run_critics
 from rim.agents.decomposer import decompose_idea
 from rim.agents.arbitrator import run_arbitration
 from rim.agents.executable_verifier import run_executable_verification
+from rim.agents.advanced_verifier import run_advanced_verification
 from rim.agents.reconciliation import reconcile_findings
 from rim.agents.spawner import build_spawn_plan
 from rim.agents.synthesizer import synthesize_idea
@@ -324,6 +325,38 @@ class RimOrchestrator:
                 2,
                 lower=1,
                 upper=15,
+            )
+            advanced_verification_enabled = _parse_bool_env(
+                "RIM_ENABLE_ADVANCED_VERIFICATION",
+                request.mode == "deep",
+            )
+            advanced_verification_max_checks = _parse_int_env(
+                "RIM_ADV_VERIFY_MAX_CHECKS",
+                4,
+                lower=1,
+                upper=20,
+            )
+            advanced_verification_sim_trials = _parse_int_env(
+                "RIM_ADV_VERIFY_SIMULATION_TRIALS",
+                200,
+                lower=10,
+                upper=5000,
+            )
+            advanced_verification_sim_min_pass_rate = _parse_float_env(
+                "RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE",
+                0.7,
+                lower=0.0,
+                upper=1.0,
+            )
+            advanced_verification_data_path = os.getenv(
+                "RIM_ADV_VERIFY_DATA_PATH",
+                "rim/eval/data/benchmark_ideas.jsonl",
+            )
+            advanced_verification_seed = _parse_int_env(
+                "RIM_ADV_VERIFY_SIMULATION_SEED",
+                42,
+                lower=0,
+                upper=2_000_000_000,
             )
             enable_memory_folding = _parse_bool_env(
                 "RIM_ENABLE_MEMORY_FOLDING",
@@ -673,6 +706,62 @@ class RimOrchestrator:
                                 1.0,
                                 float(synthesis.get("confidence_score", 0.5))
                                 - min(0.4, 0.08 * len(failed_exec_checks)),
+                            ),
+                        )
+
+                if advanced_verification_enabled:
+                    advanced_verification = run_advanced_verification(
+                        constraints=request.constraints,
+                        synthesis=synthesis,
+                        findings=findings,
+                        max_checks=advanced_verification_max_checks,
+                        simulation_trials=advanced_verification_sim_trials,
+                        simulation_min_pass_rate=advanced_verification_sim_min_pass_rate,
+                        data_reference_path=advanced_verification_data_path,
+                        simulation_seed=advanced_verification_seed,
+                    )
+                    self.repository.log_stage(
+                        run_id=run_id,
+                        stage="verification_advanced",
+                        status="completed",
+                        meta={
+                            "cycle": cycle,
+                            "simulation_trials": advanced_verification_sim_trials,
+                            "simulation_min_pass_rate": advanced_verification_sim_min_pass_rate,
+                            "data_reference_path": advanced_verification_data_path,
+                            "simulation_seed": advanced_verification_seed,
+                            **advanced_verification["summary"],
+                        },
+                    )
+                    failed_adv_checks = [
+                        check
+                        for check in list(advanced_verification.get("checks") or [])
+                        if not bool(check.get("passed"))
+                    ]
+                    if failed_adv_checks:
+                        risks = [
+                            str(item)
+                            for item in list(synthesis.get("residual_risks") or [])
+                            if str(item).strip()
+                        ]
+                        for check in failed_adv_checks[:3]:
+                            check_type = str(check.get("check_type") or "advanced").strip()
+                            detail = (
+                                str(check.get("expression") or "")
+                                or ", ".join(list(check.get("terms") or [])[:3])
+                                or "constraint"
+                            )
+                            detail = detail.strip() or "constraint"
+                            message = f"Advanced verification failed ({check_type}): {detail}"
+                            if message not in risks:
+                                risks.append(message)
+                        synthesis["residual_risks"] = risks[:8]
+                        synthesis["confidence_score"] = max(
+                            0.0,
+                            min(
+                                1.0,
+                                float(synthesis.get("confidence_score", 0.5))
+                                - min(0.35, 0.06 * len(failed_adv_checks)),
                             ),
                         )
 

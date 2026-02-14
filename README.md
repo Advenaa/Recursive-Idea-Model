@@ -33,6 +33,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - FastAPI service (`rim/api/app.py`)
 - Orchestrator pipeline with recursive stop conditions (`rim/core/orchestrator.py`)
 - Multi-round disagreement arbitration with devil's-advocate follow-ups (`rim/agents/arbitrator.py`)
+- Advanced verification adapters (`solver:`, `simulate:`, `data:`) (`rim/agents/advanced_verifier.py`)
 - Persistent API job queue (resume queued/running jobs on restart) (`rim/api/job_queue.py`)
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
 - SQLite persistence + memory context reuse (`rim/storage/`)
@@ -171,14 +172,26 @@ export RIM_ENABLE_EXECUTABLE_VERIFICATION=1
 export RIM_EXEC_VERIFY_MAX_CHECKS=5
 export RIM_ENABLE_PYTHON_EXEC_CHECKS=0
 export RIM_PYTHON_EXEC_TIMEOUT_SEC=2
+export RIM_ENABLE_ADVANCED_VERIFICATION=1
+export RIM_ADV_VERIFY_MAX_CHECKS=4
+export RIM_ADV_VERIFY_SIMULATION_TRIALS=200
+export RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE=0.7
+export RIM_ADV_VERIFY_SIMULATION_SEED=42
+export RIM_ADV_VERIFY_DATA_PATH=rim/eval/data/benchmark_ideas.jsonl
 ```
 
-Executable verification constraint format:
+Verification constraint formats:
 
 - Prefix constraint with `python:` / `py:` / `assert:` to run a safe expression check.
 - Prefix constraint with `python_exec:` to run an explicit Python snippet in a timed subprocess.
+- Prefix constraint with `solver:` to run deterministic symbolic assertions.
+- Prefix constraint with `simulate:` for Monte Carlo robustness checks (`| trials=200 | min_pass_rate=0.7` supported).
+- Prefix constraint with `data:` for data-reference checks (`| path=... | min_overlap=... | mode=all|fraction` supported).
 - Available variables in expressions: `confidence_score`, `change_count`, `risk_count`, `experiment_count`, `finding_count`, `high_finding_count`, `critical_finding_count`.
 - Example: `python: confidence_score >= 0.7 and risk_count <= 2`
+- Example: `solver: confidence_score >= 0.75 and risk_count <= 2`
+- Example: `simulate: confidence_score >= 0.65 | trials=300 | min_pass_rate=0.75`
+- Example: `data: compliance, audit | path=rim/eval/data/benchmark_ideas.jsonl | min_overlap=0.5`
 - `python_exec:` snippets receive `context` and should set `passed = True|False` (optional `detail` string).
 
 Self-iteration loop:

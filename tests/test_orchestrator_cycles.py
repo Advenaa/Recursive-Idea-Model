@@ -496,6 +496,76 @@ def test_orchestrator_runs_executable_verification(
     assert exec_logs[0].meta["failed_checks"] == 1
 
 
+def test_orchestrator_runs_advanced_verification(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    async def fake_decompose(*args, **kwargs):  # noqa: ANN001, ANN202
+        root = DecompositionNode(
+            depth=0,
+            component_text="Idea H",
+            node_type="claim",
+            confidence=0.4,
+        )
+        return [root], "codex", {"stop_reason": "max_depth"}
+
+    async def fake_critics(*args, **kwargs):  # noqa: ANN001, ANN202
+        nodes = kwargs.get("nodes") or args[1]
+        return [
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="logic",
+                issue="Need stronger confidence evidence",
+                severity="high",
+                confidence=0.75,
+                suggested_fix="Add stronger evidence",
+                provider="codex",
+            ),
+        ]
+
+    async def fake_synthesize(*args, **kwargs):  # noqa: ANN001, ANN202
+        return (
+            {
+                "synthesized_idea": "Idea H refined",
+                "changes_summary": ["Added one change."],
+                "residual_risks": [],
+                "next_experiments": ["Run one pilot."],
+                "confidence_score": 0.7,
+            },
+            ["claude"],
+        )
+
+    monkeypatch.setattr(orchestrator_module, "decompose_idea", fake_decompose)
+    monkeypatch.setattr(orchestrator_module, "run_critics", fake_critics)
+    monkeypatch.setattr(orchestrator_module, "synthesize_idea", fake_synthesize)
+    monkeypatch.setenv("RIM_MAX_ANALYSIS_CYCLES", "1")
+    monkeypatch.setenv("RIM_ENABLE_VERIFICATION", "0")
+    monkeypatch.setenv("RIM_ENABLE_EXECUTABLE_VERIFICATION", "0")
+    monkeypatch.setenv("RIM_ENABLE_ADVANCED_VERIFICATION", "1")
+    monkeypatch.setenv("RIM_ADV_VERIFY_MAX_CHECKS", "3")
+    monkeypatch.setenv("RIM_ADV_VERIFY_SIMULATION_TRIALS", "80")
+    monkeypatch.setenv("RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE", "0.7")
+
+    repo = RunRepository(db_path=tmp_path / "rim_orchestrator_advanced_verify.db")
+    orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
+    request = AnalyzeRequest(
+        idea="Idea H",
+        mode="deep",
+        constraints=["solver: confidence_score >= 0.9"],
+    )
+    run_id = orchestrator.create_run(request, status="running")
+
+    result = asyncio.run(orchestrator.execute_run(run_id, request))
+    assert result.confidence_score < 0.7
+    assert any("Advanced verification failed" in risk for risk in result.residual_risks)
+
+    logs = orchestrator.get_run_logs(run_id).logs
+    advanced_logs = [log for log in logs if log.stage == "verification_advanced"]
+    assert len(advanced_logs) == 1
+    assert advanced_logs[0].meta["total_checks"] == 1
+    assert advanced_logs[0].meta["failed_checks"] == 1
+
+
 def test_orchestrator_runs_python_exec_checks_when_enabled(
     tmp_path: Path,
     monkeypatch,  # noqa: ANN001
