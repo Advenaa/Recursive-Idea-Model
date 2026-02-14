@@ -51,6 +51,9 @@ Decomposition nodes:
 
 Critic findings:
 {findings}
+
+Memory context from prior runs:
+{memory_context}
 """
 
 REFINE_PROMPT = """Refine the synthesis output for clarity and rigor.
@@ -64,6 +67,9 @@ Current synthesis:
 
 Top findings:
 {findings}
+
+Memory context from prior runs:
+{memory_context}
 """
 
 
@@ -71,6 +77,12 @@ def _clean_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return []
+
+
+def _memory_context_block(memory_context: list[str] | None) -> str:
+    if not memory_context:
+        return "none"
+    return "\n".join(f"- {entry}" for entry in memory_context[:10])
 
 
 def _normalize_synthesis(payload: dict[str, Any], idea: str) -> dict[str, Any]:
@@ -95,6 +107,7 @@ async def synthesize_idea(
     nodes: list[DecompositionNode],
     findings: list[CriticFinding],
     settings: ModeSettings,
+    memory_context: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     node_view = [
         {
@@ -120,6 +133,7 @@ async def synthesize_idea(
         idea=idea,
         nodes=node_view,
         findings=finding_view,
+        memory_context=_memory_context_block(memory_context),
     )
     primary_payload, primary_provider = await router.invoke_json(
         "synthesize_primary",
@@ -134,6 +148,7 @@ async def synthesize_idea(
             idea=idea,
             synthesis=synthesis,
             findings=finding_view[:12],
+            memory_context=_memory_context_block(memory_context),
         )
         refined_payload, refined_provider = await router.invoke_json(
             "synthesize_refine",

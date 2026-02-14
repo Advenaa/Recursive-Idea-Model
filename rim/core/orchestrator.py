@@ -6,9 +6,49 @@ from rim.agents.critics import run_critics
 from rim.agents.decomposer import decompose_idea
 from rim.agents.synthesizer import synthesize_idea
 from rim.core.modes import get_mode_settings
-from rim.core.schemas import AnalyzeRequest, AnalyzeResult, AnalyzeRunResponse
+from rim.core.schemas import AnalyzeRequest, AnalyzeResult, AnalyzeRunResponse, CriticFinding
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
+
+
+def _memory_entries_from_run(
+    findings: list[CriticFinding],
+    changes_summary: list[str],
+    residual_risks: list[str],
+) -> list[dict]:
+    entries: list[dict] = []
+
+    for change in changes_summary[:5]:
+        entries.append(
+            {
+                "entry_type": "insight",
+                "entry_text": f"Synthesis change: {change}",
+                "score": 0.75,
+            }
+        )
+    for risk in residual_risks[:5]:
+        entries.append(
+            {
+                "entry_type": "failure",
+                "entry_text": f"Residual risk: {risk}",
+                "score": 0.7,
+            }
+        )
+
+    severity_score = {"low": 0.3, "medium": 0.55, "high": 0.75, "critical": 0.9}
+    for finding in findings:
+        if finding.severity in {"high", "critical"}:
+            entries.append(
+                {
+                    "entry_type": "pattern",
+                    "entry_text": f"{finding.critic_type} finding: {finding.issue}",
+                    "score": max(
+                        severity_score.get(finding.severity, 0.5),
+                        float(finding.confidence),
+                    ),
+                }
+            )
+    return entries[:20]
 
 
 class RimOrchestrator:
@@ -25,19 +65,27 @@ class RimOrchestrator:
         settings = get_mode_settings(request.mode)
 
         try:
+            memory_context = self.repository.get_memory_context(limit=8)
+            self.repository.log_stage(
+                run_id=run_id,
+                stage="memory_read",
+                status="completed",
+                meta={"entries": len(memory_context)},
+            )
             nodes, decompose_provider = await decompose_idea(
                 self.router,
                 request.idea,
                 settings,
                 domain=request.domain,
                 constraints=request.constraints,
+                memory_context=memory_context,
             )
             self.repository.log_stage(
                 run_id=run_id,
                 stage="decompose",
                 status="completed",
                 provider=decompose_provider,
-                meta={"node_count": len(nodes)},
+                meta={"node_count": len(nodes), "stop_max_depth": settings.max_depth},
             )
             self.repository.save_nodes(run_id, nodes)
 
@@ -56,6 +104,7 @@ class RimOrchestrator:
                 nodes,
                 findings,
                 settings,
+                memory_context=memory_context,
             )
             self.repository.log_stage(
                 run_id=run_id,
@@ -69,6 +118,18 @@ class RimOrchestrator:
                 changes_summary=synthesis["changes_summary"],
                 residual_risks=synthesis["residual_risks"],
                 next_experiments=synthesis["next_experiments"],
+            )
+            memory_entries = _memory_entries_from_run(
+                findings=findings,
+                changes_summary=synthesis["changes_summary"],
+                residual_risks=synthesis["residual_risks"],
+            )
+            self.repository.save_memory_entries(run_id, memory_entries)
+            self.repository.log_stage(
+                run_id=run_id,
+                stage="memory_write",
+                status="completed",
+                meta={"entries": len(memory_entries)},
             )
 
             result = AnalyzeResult(

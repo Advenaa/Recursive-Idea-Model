@@ -150,6 +150,42 @@ class RunRepository:
         )
         self.conn.commit()
 
+    def save_memory_entries(self, run_id: str, entries: list[dict]) -> None:
+        if not entries:
+            return
+        self.conn.executemany(
+            """
+            INSERT INTO memory_entries (id, run_id, entry_type, entry_text, score, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    str(uuid4()),
+                    run_id,
+                    str(item.get("entry_type", "insight")),
+                    str(item.get("entry_text", "")).strip(),
+                    float(item.get("score", 0.0)),
+                    _utc_now(),
+                )
+                for item in entries
+                if str(item.get("entry_text", "")).strip()
+            ],
+        )
+        self.conn.commit()
+
+    def get_memory_context(self, limit: int = 8) -> list[str]:
+        rows = self.conn.execute(
+            """
+            SELECT entry_text
+            FROM memory_entries
+            WHERE entry_text IS NOT NULL AND TRIM(entry_text) != ''
+            ORDER BY score DESC, created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [str(row["entry_text"]) for row in rows]
+
     def get_run(self, run_id: str) -> dict | None:
         run_row = self.conn.execute(
             "SELECT * FROM runs WHERE id = ?",

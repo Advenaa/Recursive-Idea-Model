@@ -31,9 +31,9 @@ The project default is **Deep mode**.
 The repository now includes a Python MVP scaffold under `rim/` with:
 
 - FastAPI service (`rim/api/app.py`)
-- Orchestrator pipeline (`rim/core/orchestrator.py`)
+- Orchestrator pipeline with recursive stop conditions (`rim/core/orchestrator.py`)
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
-- SQLite persistence (`rim/storage/`)
+- SQLite persistence + memory context reuse (`rim/storage/`)
 - Benchmark runner + dataset (`rim/eval/`)
 - Local CLI entrypoint (`rim/cli.py`)
 
