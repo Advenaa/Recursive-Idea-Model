@@ -11,6 +11,7 @@ from rim.agents.reconciliation import reconcile_findings
 from rim.agents.synthesizer import synthesize_idea
 from rim.agents.verification import verify_synthesis
 from rim.core.depth_allocator import decide_next_cycle, severity_counts
+from rim.core.memory_folding import fold_cycle_memory, fold_to_memory_entries
 from rim.core.modes import get_mode_settings
 from rim.core.schemas import (
     AnalyzeRequest,
@@ -289,6 +290,16 @@ class RimOrchestrator:
                 lower=0.0,
                 upper=1.0,
             )
+            enable_memory_folding = _parse_bool_env(
+                "RIM_ENABLE_MEMORY_FOLDING",
+                request.mode == "deep",
+            )
+            memory_fold_max_entries = _parse_int_env(
+                "RIM_MEMORY_FOLD_MAX_ENTRIES",
+                12,
+                lower=6,
+                upper=40,
+            )
             self.repository.mark_run_status(run_id=run_id, status="running")
             self.repository.log_stage(
                 run_id=run_id,
@@ -320,6 +331,7 @@ class RimOrchestrator:
             partial_error: dict | None = None
             nodes: list[DecompositionNode] = []
             findings: list[CriticFinding] = []
+            folded_memory_entries: list[dict] = []
             synthesis: dict[str, object] = _fallback_synthesis(
                 request.idea,
                 "pipeline did not produce synthesis output",
@@ -479,11 +491,39 @@ class RimOrchestrator:
                     break
                 previous_confidence = float(synthesis["confidence_score"])
                 current_idea = str(synthesis["synthesized_idea"])
-                working_memory_context = _next_cycle_memory_context(
-                    working_memory_context,
-                    synthesis,
-                    findings,
-                )
+                if enable_memory_folding:
+                    fold_payload = fold_cycle_memory(
+                        cycle=cycle,
+                        prior_context=working_memory_context,
+                        synthesis=synthesis,
+                        findings=findings,
+                        max_entries=memory_fold_max_entries,
+                    )
+                    working_memory_context = list(fold_payload["folded_context"])
+                    cycle_fold_entries = fold_to_memory_entries(
+                        fold_payload,
+                        domain=request.domain,
+                    )
+                    folded_memory_entries.extend(cycle_fold_entries)
+                    self.repository.log_stage(
+                        run_id=run_id,
+                        stage="memory_fold",
+                        status="completed",
+                        meta={
+                            "cycle": cycle,
+                            "folded_context_entries": len(working_memory_context),
+                            "episodic_entries": len(list(fold_payload["episodic"])),
+                            "working_entries": len(list(fold_payload["working"])),
+                            "tool_entries": len(list(fold_payload["tool"])),
+                            "persisted_entries": len(cycle_fold_entries),
+                        },
+                    )
+                else:
+                    working_memory_context = _next_cycle_memory_context(
+                        working_memory_context,
+                        synthesis,
+                        findings,
+                    )
 
             self.repository.save_nodes(run_id, nodes)
             self.repository.save_findings(run_id, findings)
@@ -500,6 +540,8 @@ class RimOrchestrator:
                 residual_risks=list(synthesis["residual_risks"]),
                 domain=request.domain,
             )
+            memory_entries.extend(folded_memory_entries)
+            memory_entries = memory_entries[:32]
             memory_write_started = time.perf_counter()
             self.repository.save_memory_entries(run_id, memory_entries)
             self.repository.log_stage(

@@ -110,6 +110,13 @@ def test_orchestrator_recurse_when_depth_allocator_signals_continue(
     assert len(depth_logs) == 2
     assert depth_logs[0].meta["decision"]["recurse"] is True
     assert depth_logs[1].meta["decision"]["reason"] == "max_cycles_reached"
+    fold_logs = [
+        log
+        for log in orchestrator.get_run_logs(run_id).logs
+        if log.stage == "memory_fold"
+    ]
+    assert len(fold_logs) == 1
+    assert fold_logs[0].meta["cycle"] == 1
 
 
 def test_orchestrator_defaults_to_single_cycle(

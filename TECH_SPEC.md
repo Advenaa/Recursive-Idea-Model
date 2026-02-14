@@ -136,6 +136,8 @@ Environment variables:
 28. `RIM_ENABLE_VERIFICATION` default `1` in deep mode, `0` in fast mode (deterministic post-synthesis checks)
 29. `RIM_VERIFY_MIN_CONSTRAINT_OVERLAP` default `0.6` (minimum lexical overlap for constraint coverage)
 30. `RIM_VERIFY_MIN_FINDING_OVERLAP` default `0.35` (minimum lexical overlap for high-risk finding coverage)
+31. `RIM_ENABLE_MEMORY_FOLDING` default `1` in deep mode (fold cycle context into compact tripartite memory)
+32. `RIM_MEMORY_FOLD_MAX_ENTRIES` default `12` (max folded context entries carried to next cycle)
 
 ## 5) Modes and Runtime Controls
 
@@ -367,10 +369,11 @@ Additional eval commands:
 6. `synthesis` (cycle N)
 7. `verification` (deterministic constraint/risk coverage checks)
 8. `depth_allocator` (decide recurse or stop)
-9. Repeat steps 3-8 while recursion decision is true and cycle budget remains
-10. `memory_write`
-11. `provider_budget`
-12. `finalize`
+9. `memory_fold` (when recursing; compact episodic/working/tool summaries)
+10. Repeat steps 3-9 while recursion decision is true and cycle budget remains
+11. `memory_write`
+12. `provider_budget`
+13. `finalize`
 
 ### 9.2 Parallel Challenge
 

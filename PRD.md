@@ -274,7 +274,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 ### 20.2 Partially Implemented
 
 - Learning layer:
-  persistent memory and feedback exist, but no adaptive strategy learning/meta-model for decomposition/challenge/synthesis policy updates.
+  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries, but no adaptive strategy learning/meta-model for decomposition/challenge/synthesis policy updates.
 - Orchestration depth/breadth policy:
   recursive cycle controller and heuristic DepthAllocator exist, but there is no learned depth-vs-breadth policy training yet.
 - Challenge reconciliation:
@@ -288,7 +288,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 
 - Dynamic agent spawning and specialization (AgentSpawner-style role/tool creation at runtime).
 - Neuro-symbolic verification loops (formal claim testing, executable checks, theorem/constraint tooling).
-- Tripartite memory architecture (episodic, working, tool) with autonomous memory folding.
+- Advanced memory folding policy (context degradation detection, versioned folds, and long-horizon memory quality controls).
 - RL-based orchestration training (PARL/ARPO/AEPO-style policy optimization and credit assignment).
 
 ### 20.4 Gap-Closure Priorities
