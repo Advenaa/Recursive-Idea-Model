@@ -208,8 +208,16 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
         "arbitration_resolved_count": 0,
         "devils_advocate_count": 0,
         "specialist_count": 0,
+        "specialist_loop_enabled_config": False,
+        "specialist_max_jobs_config": 0,
+        "specialist_min_confidence_config": 0.0,
         "spawn_selected_count": 0,
         "spawn_dynamic_count": 0,
+        "depth_cycles_observed": 0,
+        "depth_max_cycles_config": 0,
+        "depth_min_confidence_config": 0.0,
+        "depth_max_residual_risks_config": 0,
+        "depth_max_high_findings_config": 0,
         "memory_fold_count": 0,
         "memory_fold_degradation_count": 0,
         "memory_fold_avg_novelty_ratio": 0.0,
@@ -244,6 +252,40 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
             telemetry["specialist_count"] = max(
                 telemetry["specialist_count"],
                 _to_int(meta.get("specialist_count"), 0),
+            )
+            telemetry["specialist_loop_enabled_config"] = (
+                telemetry["specialist_loop_enabled_config"]
+                or bool(meta.get("specialist_loop_enabled", False))
+            )
+            telemetry["specialist_max_jobs_config"] = max(
+                telemetry["specialist_max_jobs_config"],
+                _to_int(meta.get("specialist_max_jobs"), 0),
+            )
+            telemetry["specialist_min_confidence_config"] = max(
+                telemetry["specialist_min_confidence_config"],
+                _to_float(meta.get("specialist_min_confidence"), 0.0),
+            )
+            continue
+        if stage == "depth_allocator":
+            telemetry["depth_cycles_observed"] = max(
+                telemetry["depth_cycles_observed"],
+                _to_int(meta.get("cycle"), 0),
+            )
+            telemetry["depth_max_cycles_config"] = max(
+                telemetry["depth_max_cycles_config"],
+                _to_int(meta.get("max_cycles"), 0),
+            )
+            telemetry["depth_min_confidence_config"] = max(
+                telemetry["depth_min_confidence_config"],
+                _to_float(meta.get("min_confidence_to_stop"), 0.0),
+            )
+            telemetry["depth_max_residual_risks_config"] = max(
+                telemetry["depth_max_residual_risks_config"],
+                _to_int(meta.get("max_residual_risks_to_stop"), 0),
+            )
+            telemetry["depth_max_high_findings_config"] = max(
+                telemetry["depth_max_high_findings_config"],
+                _to_int(meta.get("max_high_findings_to_stop"), 0),
             )
             continue
         if stage == "specialization_spawn":
@@ -1987,6 +2029,336 @@ def train_online_depth_and_arbitration_policies(
     }
 
 
+def _rl_experiences(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float,
+    target_runtime_sec: float | None,
+    runtime_weight: float,
+    failure_penalty: float,
+) -> list[dict[str, Any]]:
+    experiences: list[dict[str, Any]] = []
+    runtime_weight_normalized = _clamp_float(float(runtime_weight), 0.0, 2.0)
+    failure_penalty_normalized = _clamp_float(float(failure_penalty), 0.0, 4.0)
+    for report in reports:
+        runs = report.get("runs")
+        if not isinstance(runs, list):
+            continue
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            status = str(run.get("status") or "").strip().lower()
+            quality_payload = run.get("quality")
+            quality_score = (
+                float(quality_payload.get("quality_score"))
+                if isinstance(quality_payload, dict)
+                and isinstance(quality_payload.get("quality_score"), (int, float))
+                else 0.0
+            )
+            runtime_sec = _to_float(run.get("runtime_sec"), 0.0)
+            runtime_pressure = 0.0
+            if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+                runtime_pressure = max(
+                    0.0,
+                    (runtime_sec - float(target_runtime_sec)) / float(target_runtime_sec),
+                )
+            quality_gap = float(target_quality) - quality_score
+            telemetry = run.get("telemetry")
+            telemetry_dict = telemetry if isinstance(telemetry, dict) else {}
+            disagreement = _to_float(telemetry_dict.get("disagreement_count"), 0.0)
+            diversity = _to_float(telemetry_dict.get("diversity_flagged_count"), 0.0)
+            depth_cycles = _to_float(telemetry_dict.get("depth_max_cycles_config"), 1.0)
+            depth_min_conf = _to_float(telemetry_dict.get("depth_min_confidence_config"), 0.78)
+            depth_max_risks = _to_float(telemetry_dict.get("depth_max_residual_risks_config"), 2.0)
+            depth_max_high = _to_float(telemetry_dict.get("depth_max_high_findings_config"), 1.0)
+            specialist_jobs = _to_float(telemetry_dict.get("specialist_max_jobs_config"), 2.0)
+            specialist_min_conf = _to_float(
+                telemetry_dict.get("specialist_min_confidence_config"),
+                0.78,
+            )
+            specialist_enabled = _to_float(
+                1.0 if telemetry_dict.get("specialist_loop_enabled_config") else 0.0,
+                0.0,
+            )
+            if depth_cycles <= 0:
+                depth_cycles = 1.0
+            if depth_min_conf <= 0:
+                depth_min_conf = 0.78
+            if depth_max_risks < 0:
+                depth_max_risks = 2.0
+            if specialist_jobs < 0:
+                specialist_jobs = 2.0
+            if specialist_min_conf <= 0:
+                specialist_min_conf = 0.78
+
+            reward = quality_score - (runtime_weight_normalized * runtime_pressure)
+            if status in {"failed", "canceled"}:
+                reward -= failure_penalty_normalized
+            if status == "partial":
+                reward -= (0.5 * failure_penalty_normalized)
+            experiences.append(
+                {
+                    "run_id": str(run.get("run_id") or run.get("id") or f"run-{len(experiences)+1}"),
+                    "status": status,
+                    "quality_score": quality_score,
+                    "runtime_sec": runtime_sec,
+                    "runtime_pressure": runtime_pressure,
+                    "quality_gap": quality_gap,
+                    "disagreement": disagreement,
+                    "diversity": diversity,
+                    "reward": reward,
+                    "actions": {
+                        "depth_cycles": depth_cycles,
+                        "depth_min_conf": depth_min_conf,
+                        "depth_max_risks": depth_max_risks,
+                        "depth_max_high": depth_max_high,
+                        "specialist_jobs": specialist_jobs,
+                        "specialist_min_conf": specialist_min_conf,
+                        "specialist_enabled": specialist_enabled,
+                    },
+                }
+            )
+    return experiences
+
+
+def train_rl_depth_and_arbitration_policies(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+    learning_rate: float = 0.18,
+    epochs: int = 3,
+    reward_runtime_weight: float = 0.35,
+    reward_failure_penalty: float = 1.0,
+    prior_depth_policy_env: dict[str, Any] | None = None,
+    prior_specialist_policy_env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    valid_reports, report_ids = _valid_training_reports(reports)
+    experiences = _rl_experiences(
+        valid_reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+        runtime_weight=reward_runtime_weight,
+        failure_penalty=reward_failure_penalty,
+    )
+    alpha = _clamp_float(float(learning_rate), 0.01, 1.0)
+    epoch_count = _clamp_int(int(epochs), 1, 50)
+    runtime_weight_normalized = _clamp_float(float(reward_runtime_weight), 0.0, 2.0)
+    failure_penalty_normalized = _clamp_float(float(reward_failure_penalty), 0.0, 4.0)
+
+    depth = {
+        "min_conf": _to_float((prior_depth_policy_env or {}).get("RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE"), 0.78),
+        "max_risks": _to_float((prior_depth_policy_env or {}).get("RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS"), 2.0),
+        "max_high": _to_float((prior_depth_policy_env or {}).get("RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS"), 1.0),
+        "max_cycles": _to_float((prior_depth_policy_env or {}).get("RIM_MAX_ANALYSIS_CYCLES"), 1.0),
+    }
+    specialist = {
+        "enabled_score": _to_float(
+            (prior_specialist_policy_env or {}).get("RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP"),
+            1.0,
+        ),
+        "jobs": _to_float(
+            (prior_specialist_policy_env or {}).get("RIM_SPECIALIST_ARBITRATION_MAX_JOBS"),
+            2.0,
+        ),
+        "min_conf": _to_float(
+            (prior_specialist_policy_env or {}).get("RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"),
+            0.78,
+        ),
+    }
+    if not experiences:
+        depth_env = _blend_depth_policy_env(
+            prior_env=prior_depth_policy_env,
+            fresh_env={},
+            learning_rate=0.0,
+        )
+        specialist_env = _blend_specialist_policy_env(
+            prior_env=prior_specialist_policy_env,
+            fresh_env={},
+            learning_rate=0.0,
+        )
+        return {
+            "optimizer": "rl_credit_assignment_v1",
+            "report_count": len(valid_reports),
+            "report_ids": report_ids,
+            "experience_count": 0,
+            "learning_rate": alpha,
+            "epochs": epoch_count,
+            "target_quality": target_quality,
+            "target_runtime_sec": target_runtime_sec,
+            "depth_policy": {
+                "policy_env": depth_env,
+                "recommended_exports": calibration_env_exports({"recommended_env": depth_env}),
+                "rationale": ["No eligible run experiences; returning prior/default depth policy."],
+            },
+            "specialist_policy": {
+                "policy_env": specialist_env,
+                "recommended_exports": calibration_env_exports({"recommended_env": specialist_env}),
+                "rationale": ["No eligible run experiences; returning prior/default specialist policy."],
+            },
+            "credit_assignment": {
+                "depth": {"positive": 0.0, "negative": 0.0, "top_runs": []},
+                "specialist": {"positive": 0.0, "negative": 0.0, "top_runs": []},
+            },
+            "recommended_exports": sorted(
+                set(
+                    calibration_env_exports({"recommended_env": depth_env})
+                    + calibration_env_exports({"recommended_env": specialist_env})
+                )
+            ),
+        }
+
+    rewards = [float(item["reward"]) for item in experiences]
+    reward_baseline = sum(rewards) / len(rewards)
+    depth_credits: list[dict[str, Any]] = []
+    specialist_credits: list[dict[str, Any]] = []
+
+    for _epoch in range(epoch_count):
+        for exp in experiences:
+            reward = float(exp["reward"])
+            advantage = reward - reward_baseline
+            runtime_pressure = _to_float(exp.get("runtime_pressure"), 0.0)
+            quality_gap = _to_float(exp.get("quality_gap"), 0.0)
+            disagreement = _to_float(exp.get("disagreement"), 0.0)
+            diversity = _to_float(exp.get("diversity"), 0.0)
+            actions = exp.get("actions")
+            action_payload = actions if isinstance(actions, dict) else {}
+            depth_cycles_action = _to_float(action_payload.get("depth_cycles"), 1.0)
+            depth_min_conf_action = _to_float(action_payload.get("depth_min_conf"), 0.78)
+            specialist_jobs_action = _to_float(action_payload.get("specialist_jobs"), 2.0)
+            specialist_enabled_action = _to_float(action_payload.get("specialist_enabled"), 1.0)
+
+            depth_signal = quality_gap + (0.25 * disagreement) - (0.70 * runtime_pressure)
+            specialist_signal = (0.9 * disagreement) + (0.5 * diversity) - (0.6 * runtime_pressure)
+            depth_action_intensity = max(
+                0.0,
+                (0.35 * max(depth_cycles_action - 1.0, 0.0))
+                + (0.25 * max(depth_min_conf_action - 0.78, 0.0)),
+            )
+            specialist_action_intensity = max(
+                0.0,
+                (0.45 * specialist_enabled_action)
+                + (0.2 * max(specialist_jobs_action - 1.0, 0.0)),
+            )
+            depth_credit = advantage * depth_signal * (1.0 + (0.2 * depth_action_intensity))
+            specialist_credit = (
+                advantage
+                * specialist_signal
+                * (1.0 + (0.2 * specialist_action_intensity))
+            )
+
+            depth["max_cycles"] += alpha * depth_credit
+            depth["min_conf"] += alpha * (0.12 * depth_credit)
+            depth["max_risks"] += alpha * (-0.28 * depth_credit)
+            depth["max_high"] += alpha * (-0.20 * depth_credit)
+
+            specialist["jobs"] += alpha * (0.45 * specialist_credit)
+            specialist["min_conf"] += alpha * (0.08 * specialist_credit)
+            specialist["enabled_score"] += alpha * (0.35 * specialist_credit)
+
+            depth["max_cycles"] = _clamp_float(depth["max_cycles"], 1.0, 4.0)
+            depth["min_conf"] = _clamp_float(depth["min_conf"], 0.65, 0.93)
+            depth["max_risks"] = _clamp_float(depth["max_risks"], 0.0, 4.0)
+            depth["max_high"] = _clamp_float(depth["max_high"], 0.0, 3.0)
+
+            specialist["jobs"] = _clamp_float(specialist["jobs"], 0.0, 6.0)
+            specialist["min_conf"] = _clamp_float(specialist["min_conf"], 0.6, 0.95)
+            specialist["enabled_score"] = _clamp_float(specialist["enabled_score"], 0.0, 1.0)
+
+            depth_credits.append(
+                {
+                    "run_id": exp["run_id"],
+                    "credit": round(depth_credit, 6),
+                    "advantage": round(advantage, 6),
+                    "signal": round(depth_signal, 6),
+                    "action_intensity": round(depth_action_intensity, 6),
+                }
+            )
+            specialist_credits.append(
+                {
+                    "run_id": exp["run_id"],
+                    "credit": round(specialist_credit, 6),
+                    "advantage": round(advantage, 6),
+                    "signal": round(specialist_signal, 6),
+                    "action_intensity": round(specialist_action_intensity, 6),
+                }
+            )
+
+    depth_env = {
+        "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": round(depth["min_conf"], 3),
+        "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": _clamp_int(int(round(depth["max_risks"])), 0, 4),
+        "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": _clamp_int(int(round(depth["max_high"])), 0, 3),
+        "RIM_MAX_ANALYSIS_CYCLES": _clamp_int(int(round(depth["max_cycles"])), 1, 4),
+    }
+    specialist_enable = 1 if specialist["enabled_score"] >= 0.5 else 0
+    specialist_jobs = _clamp_int(int(round(specialist["jobs"])), 0, 6)
+    if specialist_enable == 0:
+        specialist_jobs = 0
+    specialist_env = {
+        "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": specialist_enable,
+        "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": specialist_jobs,
+        "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": round(specialist["min_conf"], 3),
+    }
+
+    def _credit_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+        positive = sum(float(item["credit"]) for item in items if float(item["credit"]) > 0.0)
+        negative = sum(float(item["credit"]) for item in items if float(item["credit"]) < 0.0)
+        ranked = sorted(items, key=lambda item: abs(float(item["credit"])), reverse=True)[:8]
+        return {
+            "positive": round(positive, 6),
+            "negative": round(negative, 6),
+            "top_runs": ranked,
+        }
+
+    depth_payload = {
+        "policy_env": depth_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": depth_env}),
+        "rationale": [
+            "Depth policy updated with reward/advantage credit assignment from recent runs.",
+        ],
+        "optimizer": "rl_credit_assignment_v1",
+        "epochs": epoch_count,
+    }
+    specialist_payload = {
+        "policy_env": specialist_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": specialist_env}),
+        "rationale": [
+            "Specialist arbitration policy updated with disagreement-weighted reward credits.",
+        ],
+        "optimizer": "rl_credit_assignment_v1",
+        "epochs": epoch_count,
+    }
+    return {
+        "optimizer": "rl_credit_assignment_v1",
+        "report_count": len(valid_reports),
+        "report_ids": report_ids,
+        "experience_count": len(experiences),
+        "learning_rate": alpha,
+        "epochs": epoch_count,
+        "target_quality": target_quality,
+        "target_runtime_sec": target_runtime_sec,
+        "reward_summary": {
+            "mean_reward": round(reward_baseline, 6),
+            "max_reward": round(max(rewards), 6),
+            "min_reward": round(min(rewards), 6),
+            "runtime_weight": runtime_weight_normalized,
+            "failure_penalty": failure_penalty_normalized,
+        },
+        "depth_policy": depth_payload,
+        "specialist_policy": specialist_payload,
+        "credit_assignment": {
+            "depth": _credit_summary(depth_credits),
+            "specialist": _credit_summary(specialist_credits),
+        },
+        "recommended_exports": sorted(
+            set(
+                depth_payload["recommended_exports"]
+                + specialist_payload["recommended_exports"]
+            )
+        ),
+    }
+
+
 def _load_recent_reports(
     *,
     reports_dir: Path,
@@ -2021,6 +2393,10 @@ async def run_online_depth_arbitration_learning_loop(
     target_quality: float = 0.65,
     target_runtime_sec: float | None = None,
     learning_rate: float = 0.35,
+    optimizer: str = "blend",
+    rl_epochs: int = 3,
+    rl_reward_runtime_weight: float = 0.35,
+    rl_reward_failure_penalty: float = 1.0,
     reports_dir: Path = DEFAULT_REPORTS_DIR,
     depth_policy_path: Path = DEFAULT_POLICIES_DIR / "depth_policy.json",
     specialist_policy_path: Path = DEFAULT_POLICIES_DIR / "specialist_policy.json",
@@ -2028,6 +2404,12 @@ async def run_online_depth_arbitration_learning_loop(
     cycles = _clamp_int(int(iterations), 1, 24)
     lookback = _clamp_int(int(lookback_reports), 1, 60)
     alpha = _clamp_float(float(learning_rate), 0.05, 1.0)
+    optimizer_name = str(optimizer or "blend").strip().lower()
+    if optimizer_name not in {"blend", "rl"}:
+        optimizer_name = "blend"
+    normalized_rl_epochs = _clamp_int(int(rl_epochs), 1, 50)
+    normalized_rl_runtime_weight = _clamp_float(float(rl_reward_runtime_weight), 0.0, 2.0)
+    normalized_rl_failure_penalty = _clamp_float(float(rl_reward_failure_penalty), 0.0, 4.0)
     reports_dir.mkdir(parents=True, exist_ok=True)
     depth_policy_path.parent.mkdir(parents=True, exist_ok=True)
     specialist_policy_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2055,14 +2437,27 @@ async def run_online_depth_arbitration_learning_loop(
             )
             prior_depth_env = load_policy_env(depth_policy_path)
             prior_specialist_env = load_policy_env(specialist_policy_path)
-            learning = train_online_depth_and_arbitration_policies(
-                training_reports,
-                target_quality=target_quality,
-                target_runtime_sec=target_runtime_sec,
-                learning_rate=alpha,
-                prior_depth_policy_env=prior_depth_env,
-                prior_specialist_policy_env=prior_specialist_env,
-            )
+            if optimizer_name == "rl":
+                learning = train_rl_depth_and_arbitration_policies(
+                    training_reports,
+                    target_quality=target_quality,
+                    target_runtime_sec=target_runtime_sec,
+                    learning_rate=alpha,
+                    epochs=normalized_rl_epochs,
+                    reward_runtime_weight=normalized_rl_runtime_weight,
+                    reward_failure_penalty=normalized_rl_failure_penalty,
+                    prior_depth_policy_env=prior_depth_env,
+                    prior_specialist_policy_env=prior_specialist_env,
+                )
+            else:
+                learning = train_online_depth_and_arbitration_policies(
+                    training_reports,
+                    target_quality=target_quality,
+                    target_runtime_sec=target_runtime_sec,
+                    learning_rate=alpha,
+                    prior_depth_policy_env=prior_depth_env,
+                    prior_specialist_policy_env=prior_specialist_env,
+                )
             depth_save_path = save_policy_artifact(
                 learning["depth_policy"],
                 policy_kind="depth",
@@ -2098,6 +2493,7 @@ async def run_online_depth_arbitration_learning_loop(
                         "failure_count": report.get("failure_count"),
                     },
                     "training_report_count": len(training_reports),
+                    "optimizer": learning.get("optimizer", optimizer_name),
                     "depth_policy_path": str(depth_save_path),
                     "specialist_policy_path": str(specialist_save_path),
                     "depth_policy_env": learning["depth_policy"]["policy_env"],
@@ -2120,6 +2516,10 @@ async def run_online_depth_arbitration_learning_loop(
         "iterations": cycles,
         "lookback_reports": lookback,
         "learning_rate": alpha,
+        "optimizer": optimizer_name,
+        "rl_epochs": normalized_rl_epochs,
+        "rl_reward_runtime_weight": normalized_rl_runtime_weight,
+        "rl_reward_failure_penalty": normalized_rl_failure_penalty,
         "target_quality": target_quality,
         "target_runtime_sec": target_runtime_sec,
         "depth_policy_path": str(depth_policy_path),

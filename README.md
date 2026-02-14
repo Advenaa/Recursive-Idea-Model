@@ -126,7 +126,8 @@ rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --tar
 rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
-rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35
+rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
+rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3
 ```
 
 Provider env vars:

@@ -26,6 +26,7 @@ from rim.eval.runner import (
     save_report,
     train_depth_policy,
     train_memory_policy,
+    train_rl_depth_and_arbitration_policies,
     train_spawn_policy,
     train_specialist_arbitration_policy,
 )
@@ -445,6 +446,29 @@ def _cmd_eval_train_memory_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_eval_train_rl_policy(args: argparse.Namespace) -> int:
+    report_paths = _resolve_train_policy_reports(args)
+    reports = [load_report(path) for path in report_paths]
+    policy = train_rl_depth_and_arbitration_policies(
+        reports,
+        target_quality=args.target_quality,
+        target_runtime_sec=args.target_runtime_sec,
+        learning_rate=args.learning_rate,
+        epochs=args.epochs,
+        reward_runtime_weight=args.reward_runtime_weight,
+        reward_failure_penalty=args.reward_failure_penalty,
+    )
+    payload = {
+        "report_count": len(report_paths),
+        "report_paths": [str(path) for path in report_paths],
+        "policy": policy,
+    }
+    if args.save:
+        Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 async def _cmd_eval_calibrate_loop(args: argparse.Namespace) -> int:
     orchestrator = _build_orchestrator()
     dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
@@ -485,6 +509,10 @@ async def _cmd_eval_autolearn(args: argparse.Namespace) -> int:
         target_quality=args.target_quality,
         target_runtime_sec=args.target_runtime_sec,
         learning_rate=args.learning_rate,
+        optimizer=args.optimizer,
+        rl_epochs=args.rl_epochs,
+        rl_reward_runtime_weight=args.rl_reward_runtime_weight,
+        rl_reward_failure_penalty=args.rl_reward_failure_penalty,
         reports_dir=reports_dir,
         depth_policy_path=Path(args.depth_policy_path),
         specialist_policy_path=Path(args.specialist_policy_path),
@@ -637,6 +665,19 @@ def build_parser() -> argparse.ArgumentParser:
     eval_train_memory_policy.add_argument("--target-quality", type=float, default=0.65)
     eval_train_memory_policy.add_argument("--target-runtime-sec", type=float)
     eval_train_memory_policy.add_argument("--save")
+    eval_train_rl_policy = eval_sub.add_parser(
+        "train-rl-policy",
+        help="Train RL-style depth + specialist policy updates with reward credit assignment",
+    )
+    eval_train_rl_policy.add_argument("--reports", help="comma-separated report paths")
+    eval_train_rl_policy.add_argument("--reports-dir")
+    eval_train_rl_policy.add_argument("--target-quality", type=float, default=0.65)
+    eval_train_rl_policy.add_argument("--target-runtime-sec", type=float)
+    eval_train_rl_policy.add_argument("--learning-rate", type=float, default=0.18)
+    eval_train_rl_policy.add_argument("--epochs", type=int, default=3)
+    eval_train_rl_policy.add_argument("--reward-runtime-weight", type=float, default=0.35)
+    eval_train_rl_policy.add_argument("--reward-failure-penalty", type=float, default=1.0)
+    eval_train_rl_policy.add_argument("--save")
     eval_autolearn = eval_sub.add_parser(
         "autolearn",
         help="Run benchmark iterations and auto-update depth + specialist policies from fresh telemetry",
@@ -649,6 +690,10 @@ def build_parser() -> argparse.ArgumentParser:
     eval_autolearn.add_argument("--target-quality", type=float, default=0.65)
     eval_autolearn.add_argument("--target-runtime-sec", type=float)
     eval_autolearn.add_argument("--learning-rate", type=float, default=0.35)
+    eval_autolearn.add_argument("--optimizer", choices=["blend", "rl"], default="rl")
+    eval_autolearn.add_argument("--rl-epochs", type=int, default=3)
+    eval_autolearn.add_argument("--rl-reward-runtime-weight", type=float, default=0.35)
+    eval_autolearn.add_argument("--rl-reward-failure-penalty", type=float, default=1.0)
     eval_autolearn.add_argument("--reports-dir")
     eval_autolearn.add_argument(
         "--depth-policy-path",
@@ -707,6 +752,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_train_spawn_policy(args))
     if args.command == "eval" and args.eval_command == "train-memory-policy":
         raise SystemExit(_cmd_eval_train_memory_policy(args))
+    if args.command == "eval" and args.eval_command == "train-rl-policy":
+        raise SystemExit(_cmd_eval_train_rl_policy(args))
     if args.command == "eval" and args.eval_command == "autolearn":
         raise SystemExit(asyncio.run(_cmd_eval_autolearn(args)))
     if args.command == "health":
