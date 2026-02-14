@@ -279,6 +279,8 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
   recursive cycle controller and heuristic DepthAllocator exist, but there is no learned depth-vs-breadth policy training yet.
 - Challenge reconciliation:
   basic consensus/disagreement aggregation is implemented, but there is no explicit devil's-advocate respawn or specialist arbitration sub-agent loop.
+- Verification layer:
+  deterministic post-synthesis checks (constraint/risk coverage) are implemented, but no executable theorem/solver/simulation verification loop yet.
 
 ### 20.3 Missing / Slacking Against SOTA Paper
 

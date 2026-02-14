@@ -132,6 +132,9 @@ Environment variables:
 24. `RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS` default `1` (high-severity finding tolerance before recurse)
 25. `RIM_RECONCILE_CONSENSUS_MIN_AGENTS` default `3` (minimum distinct critic roles to mark consensus flaw)
 26. `RIM_RECONCILE_CONSENSUS_MIN_CONFIDENCE` default `0.7` (minimum average confidence for consensus flaw)
+27. `RIM_ENABLE_VERIFICATION` default `1` in deep mode, `0` in fast mode (deterministic post-synthesis checks)
+28. `RIM_VERIFY_MIN_CONSTRAINT_OVERLAP` default `0.6` (minimum lexical overlap for constraint coverage)
+29. `RIM_VERIFY_MIN_FINDING_OVERLAP` default `0.35` (minimum lexical overlap for high-risk finding coverage)
 
 ## 5) Modes and Runtime Controls
 
@@ -361,11 +364,12 @@ Additional eval commands:
 4. `challenge_parallel` (cycle N)
 5. `challenge_reconciliation` (consensus/disagreement aggregation)
 6. `synthesis` (cycle N)
-7. `depth_allocator` (decide recurse or stop)
-8. Repeat steps 3-7 while recursion decision is true and cycle budget remains
-9. `memory_write`
-10. `provider_budget`
-11. `finalize`
+7. `verification` (deterministic constraint/risk coverage checks)
+8. `depth_allocator` (decide recurse or stop)
+9. Repeat steps 3-8 while recursion decision is true and cycle budget remains
+10. `memory_write`
+11. `provider_budget`
+12. `finalize`
 
 ### 9.2 Parallel Challenge
 

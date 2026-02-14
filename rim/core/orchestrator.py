@@ -9,6 +9,7 @@ from rim.agents.critics import run_critics
 from rim.agents.decomposer import decompose_idea
 from rim.agents.reconciliation import reconcile_findings
 from rim.agents.synthesizer import synthesize_idea
+from rim.agents.verification import verify_synthesis
 from rim.core.depth_allocator import decide_next_cycle, severity_counts
 from rim.core.modes import get_mode_settings
 from rim.core.schemas import (
@@ -137,6 +138,18 @@ def _parse_int_env(
     return max(lower, min(upper, value))
 
 
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
 def _parse_float_env(
     name: str,
     default: float,
@@ -259,6 +272,23 @@ class RimOrchestrator:
                 lower=0.0,
                 upper=1.0,
             )
+            verification_default = request.mode == "deep"
+            verification_enabled = _parse_bool_env(
+                "RIM_ENABLE_VERIFICATION",
+                verification_default,
+            )
+            verification_min_constraint_overlap = _parse_float_env(
+                "RIM_VERIFY_MIN_CONSTRAINT_OVERLAP",
+                0.6,
+                lower=0.0,
+                upper=1.0,
+            )
+            verification_min_finding_overlap = _parse_float_env(
+                "RIM_VERIFY_MIN_FINDING_OVERLAP",
+                0.35,
+                lower=0.0,
+                upper=1.0,
+            )
             self.repository.mark_run_status(run_id=run_id, status="running")
             self.repository.log_stage(
                 run_id=run_id,
@@ -370,6 +400,48 @@ class RimOrchestrator:
                     )
                     cycles_completed = cycle
                     break
+
+                if verification_enabled:
+                    verification = verify_synthesis(
+                        synthesis=synthesis,
+                        findings=findings,
+                        constraints=request.constraints,
+                        min_constraint_overlap=verification_min_constraint_overlap,
+                        min_finding_overlap=verification_min_finding_overlap,
+                    )
+                    self.repository.log_stage(
+                        run_id=run_id,
+                        stage="verification",
+                        status="completed",
+                        meta={"cycle": cycle, **verification["summary"]},
+                    )
+                    failed_checks = [
+                        check
+                        for check in list(verification.get("checks") or [])
+                        if not bool(check.get("passed"))
+                    ]
+                    if failed_checks:
+                        risks = [
+                            str(item)
+                            for item in list(synthesis.get("residual_risks") or [])
+                            if str(item).strip()
+                        ]
+                        for check in failed_checks[:3]:
+                            detail = str(check.get("description") or "unknown issue").strip()
+                            check_type = str(check.get("check_type") or "verification").strip()
+                            message = f"Verification check failed ({check_type}): {detail}"
+                            if message not in risks:
+                                risks.append(message)
+                        synthesis["residual_risks"] = risks[:8]
+                        penalty = min(0.3, 0.05 * len(failed_checks))
+                        adjusted_confidence = max(
+                            0.0,
+                            min(
+                                1.0,
+                                float(synthesis.get("confidence_score", 0.5)) - penalty,
+                            ),
+                        )
+                        synthesis["confidence_score"] = adjusted_confidence
 
                 high_findings, critical_findings = severity_counts(findings)
                 decision = decide_next_cycle(

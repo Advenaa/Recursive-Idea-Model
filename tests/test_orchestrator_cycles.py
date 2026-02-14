@@ -167,3 +167,72 @@ def test_orchestrator_defaults_to_single_cycle(
     result = asyncio.run(orchestrator.execute_run(run_id, request))
     assert state["cycle"] == 1
     assert result.synthesized_idea == "Idea B refined"
+
+
+def test_orchestrator_verification_penalizes_uncovered_output(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    async def fake_decompose(*args, **kwargs):  # noqa: ANN001, ANN202
+        root = DecompositionNode(
+            depth=0,
+            component_text="Idea C",
+            node_type="claim",
+            confidence=0.4,
+        )
+        return [root], "codex", {"stop_reason": "max_depth"}
+
+    async def fake_critics(*args, **kwargs):  # noqa: ANN001, ANN202
+        nodes = kwargs.get("nodes") or args[1]
+        return [
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="evidence",
+                issue="Missing regulatory compliance controls",
+                severity="critical",
+                confidence=0.85,
+                suggested_fix="Add compliance controls",
+                provider="claude",
+            )
+        ]
+
+    async def fake_synthesize(*args, **kwargs):  # noqa: ANN001, ANN202
+        return (
+            {
+                "synthesized_idea": "Run a very small pilot first.",
+                "changes_summary": ["Reduced rollout size."],
+                "residual_risks": [],
+                "next_experiments": ["Recruit ten users."],
+                "confidence_score": 0.9,
+            },
+            ["claude"],
+        )
+
+    monkeypatch.setattr(orchestrator_module, "decompose_idea", fake_decompose)
+    monkeypatch.setattr(orchestrator_module, "run_critics", fake_critics)
+    monkeypatch.setattr(orchestrator_module, "synthesize_idea", fake_synthesize)
+    monkeypatch.setenv("RIM_MAX_ANALYSIS_CYCLES", "1")
+    monkeypatch.setenv("RIM_ENABLE_VERIFICATION", "1")
+    monkeypatch.setenv("RIM_VERIFY_MIN_CONSTRAINT_OVERLAP", "0.9")
+    monkeypatch.setenv("RIM_VERIFY_MIN_FINDING_OVERLAP", "0.7")
+
+    repo = RunRepository(db_path=tmp_path / "rim_orchestrator_verification.db")
+    orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
+    request = AnalyzeRequest(
+        idea="Idea C",
+        mode="deep",
+        constraints=["Include regulatory compliance controls"],
+    )
+    run_id = orchestrator.create_run(request, status="running")
+
+    result = asyncio.run(orchestrator.execute_run(run_id, request))
+    assert result.confidence_score < 0.9
+    assert any("Verification check failed" in risk for risk in result.residual_risks)
+
+    verification_logs = [
+        log
+        for log in orchestrator.get_run_logs(run_id).logs
+        if log.stage == "verification"
+    ]
+    assert len(verification_logs) == 1
+    assert verification_logs[0].meta["failed_checks"] >= 1
