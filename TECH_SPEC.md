@@ -117,6 +117,8 @@ Environment variables:
 9. `RIM_RUN_MAX_ESTIMATED_TOKENS` default `500000`
 10. `RIM_RUN_MAX_ESTIMATED_COST_USD` default `10.0`
 11. `RIM_QUEUE_WORKERS` default `1`
+12. `RIM_MEMORY_MAX_AGE_DAYS` default `120`
+13. `RIM_MEMORY_MIN_SEVERITY` default `medium` (or `low` for deep-mode override)
 
 ## 5) Modes and Runtime Controls
 
@@ -194,8 +196,18 @@ Environment variables:
 2. `run_id` (fk runs.id)
 3. `entry_type` (text: pattern|failure|heuristic|insight)
 4. `entry_text` (text)
-5. `score` (real)
-6. `created_at` (datetime)
+5. `domain` (text nullable)
+6. `severity` (text: low|medium|high|critical)
+7. `score` (real)
+8. `created_at` (datetime)
+
+`run_feedback`
+
+1. `id` (text primary key)
+2. `run_id` (fk runs.id)
+3. `verdict` (text: accept|reject)
+4. `notes` (text nullable)
+5. `created_at` (datetime)
 
 `stage_logs`
 
@@ -254,6 +266,23 @@ Returns ordered stage telemetry for the run:
 3. latency,
 4. status,
 5. stage metadata (including decomposition stop reason when applicable).
+
+### 7.5 `POST /runs/{run_id}/feedback`
+
+Request JSON:
+
+```json
+{
+  "verdict": "accept|reject",
+  "notes": "optional"
+}
+```
+
+Behavior:
+
+1. Stores run-level feedback.
+2. Re-scores memory entries derived from that run.
+3. Optionally persists feedback notes as memory for future retrieval.
 
 ## 8) Local CLI Specification
 

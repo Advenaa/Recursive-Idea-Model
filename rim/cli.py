@@ -71,6 +71,21 @@ def _cmd_run_logs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run_feedback(args: argparse.Namespace) -> int:
+    orchestrator = _build_orchestrator()
+    run = orchestrator.get_run(args.run_id)
+    if run is None:
+        print("Run not found")
+        return 1
+    payload = orchestrator.submit_feedback(
+        run_id=args.run_id,
+        verdict=args.verdict,
+        notes=args.notes,
+    )
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 async def _cmd_health() -> int:
     repository = RunRepository()
     router = ProviderRouter()
@@ -143,6 +158,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_show.add_argument("run_id")
     run_logs = run_sub.add_parser("logs", help="Show stage telemetry logs")
     run_logs.add_argument("run_id")
+    run_feedback = run_sub.add_parser("feedback", help="Submit run feedback")
+    run_feedback.add_argument("run_id")
+    run_feedback.add_argument("--verdict", choices=["accept", "reject"], required=True)
+    run_feedback.add_argument("--notes")
 
     eval_parser = sub.add_parser("eval", help="Benchmark and scoring")
     eval_sub = eval_parser.add_subparsers(dest="eval_command", required=True)
@@ -172,6 +191,8 @@ def main() -> None:
         raise SystemExit(_cmd_run_show(args))
     if args.command == "run" and args.run_command == "logs":
         raise SystemExit(_cmd_run_logs(args))
+    if args.command == "run" and args.run_command == "feedback":
+        raise SystemExit(_cmd_run_feedback(args))
     if args.command == "eval" and args.eval_command == "run":
         raise SystemExit(asyncio.run(_cmd_eval_run(args)))
     if args.command == "eval" and args.eval_command == "list":

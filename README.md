@@ -66,6 +66,9 @@ curl -s -X POST "http://127.0.0.1:8000/analyze" \
 
 curl -s "http://127.0.0.1:8000/runs/<run_id>"
 curl -s "http://127.0.0.1:8000/runs/<run_id>/logs"
+curl -s -X POST "http://127.0.0.1:8000/runs/<run_id>/feedback" \
+  -H "Content-Type: application/json" \
+  -d '{"verdict":"accept","notes":"Strong output"}'
 ```
 
 API usage (blocking for one call):
@@ -82,6 +85,7 @@ Run CLI:
 rim health
 rim analyze --idea "Your idea here" --mode deep --json
 rim run logs <run_id>
+rim run feedback <run_id> --verdict accept --notes "Strong output"
 rim eval run --mode deep --limit 3
 rim eval list
 rim eval compare
@@ -98,6 +102,8 @@ export RIM_RUN_MAX_PROVIDER_CALLS=120
 export RIM_RUN_MAX_PROVIDER_LATENCY_MS=900000
 export RIM_RUN_MAX_ESTIMATED_TOKENS=500000
 export RIM_RUN_MAX_ESTIMATED_COST_USD=10.0
+export RIM_MEMORY_MAX_AGE_DAYS=120
+export RIM_MEMORY_MIN_SEVERITY=medium
 ```
 
 ## Papers

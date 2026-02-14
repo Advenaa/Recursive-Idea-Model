@@ -9,9 +9,43 @@ from uuid import uuid4
 from rim.core.schemas import CriticFinding, DecompositionNode
 from rim.storage.db import get_connection, init_db
 
+SEVERITY_RANK = {
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_severity(value: str | None) -> str:
+    parsed = str(value or "medium").strip().lower()
+    if parsed in SEVERITY_RANK:
+        return parsed
+    return "medium"
+
+
+def _feedback_delta(entry_type: str, verdict: str) -> float:
+    if verdict == "accept":
+        boosts = {
+            "insight": 0.12,
+            "pattern": 0.10,
+            "failure": 0.05,
+            "feedback": 0.08,
+        }
+        return boosts.get(entry_type, 0.08)
+
+    penalties = {
+        "insight": -0.20,
+        "pattern": -0.12,
+        # Negative feedback increases failure/risk memory relevance.
+        "failure": 0.10,
+        "feedback": 0.05,
+    }
+    return penalties.get(entry_type, -0.10)
 
 
 class RunRepository:
@@ -172,8 +206,8 @@ class RunRepository:
             return
         self.conn.executemany(
             """
-            INSERT INTO memory_entries (id, run_id, entry_type, entry_text, score, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO memory_entries (id, run_id, entry_type, entry_text, domain, severity, score, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -181,6 +215,8 @@ class RunRepository:
                     run_id,
                     str(item.get("entry_type", "insight")),
                     str(item.get("entry_text", "")).strip(),
+                    str(item.get("domain", "")).strip() or None,
+                    _normalize_severity(item.get("severity")),
                     float(item.get("score", 0.0)),
                     _utc_now(),
                 )
@@ -190,17 +226,53 @@ class RunRepository:
         )
         self.conn.commit()
 
-    def get_memory_context(self, limit: int = 8) -> list[str]:
-        rows = self.conn.execute(
+    def get_memory_context(
+        self,
+        limit: int = 8,
+        domain: str | None = None,
+        max_age_days: int | None = None,
+        min_severity: str = "low",
+    ) -> list[str]:
+        where: list[str] = [
+            "entry_text IS NOT NULL",
+            "TRIM(entry_text) != ''",
+            "COALESCE(score, 0.0) > 0.0",
+        ]
+        params: list[object] = []
+
+        min_rank = SEVERITY_RANK.get(_normalize_severity(min_severity), 1)
+        where.append(
             """
+            (CASE LOWER(COALESCE(severity, 'medium'))
+                WHEN 'low' THEN 1
+                WHEN 'medium' THEN 2
+                WHEN 'high' THEN 3
+                WHEN 'critical' THEN 4
+                ELSE 2
+            END) >= ?
+            """.strip()
+        )
+        params.append(min_rank)
+
+        if domain and str(domain).strip():
+            where.append(
+                "(LOWER(TRIM(domain)) = LOWER(TRIM(?)) OR domain IS NULL OR TRIM(domain) = '')"
+            )
+            params.append(str(domain).strip())
+
+        if max_age_days is not None and max_age_days > 0:
+            where.append("julianday(created_at) >= julianday('now', ?)")
+            params.append(f"-{int(max_age_days)} days")
+
+        query = f"""
             SELECT entry_text
             FROM memory_entries
-            WHERE entry_text IS NOT NULL AND TRIM(entry_text) != ''
-            ORDER BY score DESC, created_at DESC
+            WHERE {' AND '.join(where)}
+            ORDER BY COALESCE(score, 0.0) DESC, created_at DESC
             LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        """
+        params.append(limit)
+        rows = self.conn.execute(query, params).fetchall()
         return [str(row["entry_text"]) for row in rows]
 
     def get_run(self, run_id: str) -> dict | None:
@@ -262,6 +334,16 @@ class RunRepository:
             return None
         return decoded if isinstance(decoded, dict) else None
 
+    def get_run_domain(self, run_id: str) -> str | None:
+        payload = self.get_run_request(run_id)
+        if payload is None:
+            return None
+        domain = payload.get("domain")
+        if domain is None:
+            return None
+        parsed = str(domain).strip()
+        return parsed or None
+
     def get_pending_runs(self, limit: int = 200) -> list[str]:
         rows = self.conn.execute(
             """
@@ -274,6 +356,76 @@ class RunRepository:
             (limit,),
         ).fetchall()
         return [str(row["id"]) for row in rows]
+
+    def submit_run_feedback(
+        self,
+        run_id: str,
+        verdict: str,
+        notes: str | None = None,
+    ) -> dict:
+        run_exists = self.conn.execute(
+            "SELECT 1 FROM runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if run_exists is None:
+            raise ValueError("Run not found")
+
+        verdict = str(verdict).strip().lower()
+        if verdict not in {"accept", "reject"}:
+            raise ValueError("Feedback verdict must be 'accept' or 'reject'")
+
+        created_at = _utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO run_feedback (id, run_id, verdict, notes, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (str(uuid4()), run_id, verdict, notes, created_at),
+        )
+
+        updated = 0
+        rows = self.conn.execute(
+            "SELECT id, entry_type, score FROM memory_entries WHERE run_id = ?",
+            (run_id,),
+        ).fetchall()
+        updates: list[tuple[float, str]] = []
+        for row in rows:
+            entry_type = str(row["entry_type"] or "insight")
+            current = float(row["score"] or 0.0)
+            adjusted = max(0.0, min(1.0, current + _feedback_delta(entry_type, verdict)))
+            updates.append((adjusted, str(row["id"])))
+        if updates:
+            self.conn.executemany(
+                "UPDATE memory_entries SET score = ? WHERE id = ?",
+                updates,
+            )
+            updated += len(updates)
+
+        note = str(notes or "").strip()
+        if note:
+            self.save_memory_entries(
+                run_id=run_id,
+                entries=[
+                    {
+                        "entry_type": "feedback",
+                        "entry_text": f"User feedback ({verdict}): {note}",
+                        "domain": self.get_run_domain(run_id),
+                        "severity": "high" if verdict == "reject" else "medium",
+                        "score": 0.9 if verdict == "reject" else 0.75,
+                    }
+                ],
+            )
+            updated += 1
+        else:
+            self.conn.commit()
+
+        return {
+            "run_id": run_id,
+            "verdict": verdict,
+            "notes": note or None,
+            "updated_memory_entries": updated,
+            "created_at": created_at,
+        }
 
     def get_stage_logs(self, run_id: str) -> list[dict]:
         rows = self.conn.execute(

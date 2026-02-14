@@ -59,7 +59,18 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     run_id TEXT NOT NULL,
     entry_type TEXT NOT NULL,
     entry_text TEXT NOT NULL,
+    domain TEXT,
+    severity TEXT,
     score REAL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS run_feedback (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    notes TEXT,
     created_at TEXT NOT NULL,
     FOREIGN KEY(run_id) REFERENCES runs(id)
 );
@@ -94,4 +105,23 @@ def init_db(conn: sqlite3.Connection) -> None:
     }
     if "request_json" not in run_cols:
         conn.execute("ALTER TABLE runs ADD COLUMN request_json TEXT")
+    memory_cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(memory_entries)").fetchall()
+    }
+    if "domain" not in memory_cols:
+        conn.execute("ALTER TABLE memory_entries ADD COLUMN domain TEXT")
+    if "severity" not in memory_cols:
+        conn.execute("ALTER TABLE memory_entries ADD COLUMN severity TEXT")
+        conn.execute("UPDATE memory_entries SET severity = 'medium' WHERE severity IS NULL")
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memory_entries_domain_severity_created ON memory_entries(domain, severity, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memory_entries_score_created ON memory_entries(score, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_run_feedback_run_created ON run_feedback(run_id, created_at)"
+    )
     conn.commit()

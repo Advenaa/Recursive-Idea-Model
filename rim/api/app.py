@@ -5,7 +5,12 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from rim.api.job_queue import RunJobQueue
 from rim.core.orchestrator import RimOrchestrator
 from rim.core.schemas import (
-    AnalyzeRequest, AnalyzeRunResponse, HealthResponse, RunLogsResponse
+    AnalyzeRequest,
+    AnalyzeRunResponse,
+    HealthResponse,
+    RunFeedbackRequest,
+    RunFeedbackResponse,
+    RunLogsResponse,
 )
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
@@ -69,3 +74,19 @@ async def get_run_logs(run_id: str) -> RunLogsResponse:
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return orchestrator.get_run_logs(run_id)
+
+
+@app.post("/runs/{run_id}/feedback", response_model=RunFeedbackResponse)
+async def submit_run_feedback(
+    run_id: str,
+    request: RunFeedbackRequest,
+) -> RunFeedbackResponse:
+    run = orchestrator.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    payload = orchestrator.submit_feedback(
+        run_id=run_id,
+        verdict=request.verdict,
+        notes=request.notes,
+    )
+    return RunFeedbackResponse.model_validate(payload)

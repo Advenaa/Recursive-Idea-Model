@@ -68,6 +68,19 @@ class RunLogsResponse(BaseModel):
     logs: list[StageLogEntry]
 
 
+class RunFeedbackRequest(BaseModel):
+    verdict: Literal["accept", "reject"]
+    notes: str | None = None
+
+
+class RunFeedbackResponse(BaseModel):
+    run_id: str
+    verdict: Literal["accept", "reject"]
+    notes: str | None = None
+    updated_memory_entries: int
+    created_at: str
+
+
 class HealthResponse(BaseModel):
     ok: bool
     db: bool

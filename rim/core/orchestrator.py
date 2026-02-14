@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ def _memory_entries_from_run(
     findings: list[CriticFinding],
     changes_summary: list[str],
     residual_risks: list[str],
+    domain: str | None,
 ) -> list[dict]:
     entries: list[dict] = []
 
@@ -32,6 +34,8 @@ def _memory_entries_from_run(
             {
                 "entry_type": "insight",
                 "entry_text": f"Synthesis change: {change}",
+                "domain": domain,
+                "severity": "medium",
                 "score": 0.75,
             }
         )
@@ -40,6 +44,8 @@ def _memory_entries_from_run(
             {
                 "entry_type": "failure",
                 "entry_text": f"Residual risk: {risk}",
+                "domain": domain,
+                "severity": "high",
                 "score": 0.7,
             }
         )
@@ -51,6 +57,8 @@ def _memory_entries_from_run(
                 {
                     "entry_type": "pattern",
                     "entry_text": f"{finding.critic_type} finding: {finding.issue}",
+                    "domain": domain,
+                    "severity": finding.severity,
                     "score": max(
                         severity_score.get(finding.severity, 0.5),
                         float(finding.confidence),
@@ -81,6 +89,9 @@ class RimOrchestrator:
         provider_session = self.router.create_session(run_id)
 
         try:
+            default_min_severity = "low" if request.mode == "deep" else "medium"
+            memory_min_severity = os.getenv("RIM_MEMORY_MIN_SEVERITY", default_min_severity)
+            memory_max_age_days = int(os.getenv("RIM_MEMORY_MAX_AGE_DAYS", "120"))
             self.repository.mark_run_status(run_id=run_id, status="running")
             self.repository.log_stage(
                 run_id=run_id,
@@ -88,12 +99,22 @@ class RimOrchestrator:
                 status="completed",
                 meta={"mode": request.mode},
             )
-            memory_context = self.repository.get_memory_context(limit=8)
+            memory_context = self.repository.get_memory_context(
+                limit=8,
+                domain=request.domain,
+                max_age_days=memory_max_age_days,
+                min_severity=memory_min_severity,
+            )
             self.repository.log_stage(
                 run_id=run_id,
                 stage="memory_read",
                 status="completed",
-                meta={"entries": len(memory_context)},
+                meta={
+                    "entries": len(memory_context),
+                    "domain": request.domain,
+                    "max_age_days": memory_max_age_days,
+                    "min_severity": memory_min_severity,
+                },
             )
             decompose_started = time.perf_counter()
             nodes, decompose_provider, decompose_meta = await decompose_idea(
@@ -152,6 +173,7 @@ class RimOrchestrator:
                 findings=findings,
                 changes_summary=synthesis["changes_summary"],
                 residual_risks=synthesis["residual_risks"],
+                domain=request.domain,
             )
             memory_write_started = time.perf_counter()
             self.repository.save_memory_entries(run_id, memory_entries)
@@ -240,3 +262,25 @@ class RimOrchestrator:
             run_id=run_id,
             logs=[StageLogEntry.model_validate(item) for item in logs],
         )
+
+    def submit_feedback(
+        self,
+        run_id: str,
+        verdict: str,
+        notes: str | None = None,
+    ) -> dict:
+        feedback = self.repository.submit_run_feedback(
+            run_id=run_id,
+            verdict=verdict,
+            notes=notes,
+        )
+        self.repository.log_stage(
+            run_id=run_id,
+            stage="feedback",
+            status="completed",
+            meta={
+                "verdict": feedback["verdict"],
+                "updated_memory_entries": feedback["updated_memory_entries"],
+            },
+        )
+        return feedback
