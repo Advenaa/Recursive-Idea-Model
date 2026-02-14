@@ -11,11 +11,14 @@ from rim.eval.runner import (
     calibration_env_exports,
     compare_reports,
     evaluate_regression_gate,
+    run_online_depth_arbitration_learning_loop,
     run_benchmark,
     run_duel_benchmark,
     run_single_pass_baseline,
     save_blind_review_packet,
+    save_policy_artifact,
     save_report,
+    train_online_depth_and_arbitration_policies,
     train_depth_policy,
     train_memory_policy,
     train_spawn_policy,
@@ -586,3 +589,101 @@ def test_train_memory_policy_aggregates_reports() -> None:
     assert "RIM_MEMORY_FOLD_NOVELTY_FLOOR" in env
     assert "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO" in env
     assert payload["recommended_exports"]
+
+
+def test_train_online_depth_and_arbitration_policies_blends_prior() -> None:
+    reports = [
+        {
+            "created_at": "2026-02-14T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.52,
+            "average_runtime_sec": 62.0,
+            "failure_count": 1,
+            "runs": [
+                {
+                    "status": "completed",
+                    "telemetry": {
+                        "disagreement_count": 2,
+                        "diversity_flagged_count": 1,
+                        "specialist_count": 1,
+                    },
+                }
+            ],
+        }
+    ]
+    payload = train_online_depth_and_arbitration_policies(
+        reports,
+        target_quality=0.7,
+        target_runtime_sec=60.0,
+        learning_rate=0.5,
+        prior_depth_policy_env={
+            "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": 0.7,
+            "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": 3,
+            "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": 2,
+            "RIM_MAX_ANALYSIS_CYCLES": 1,
+        },
+        prior_specialist_policy_env={
+            "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": 1,
+            "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": 1,
+            "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": 0.7,
+        },
+    )
+    assert payload["report_count"] == 1
+    depth_env = payload["depth_policy"]["policy_env"]
+    specialist_env = payload["specialist_policy"]["policy_env"]
+    assert "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE" in depth_env
+    assert "RIM_SPECIALIST_ARBITRATION_MAX_JOBS" in specialist_env
+    assert payload["recommended_exports"]
+
+
+def test_save_policy_artifact_writes_expected_shape(tmp_path) -> None:  # noqa: ANN001
+    path = tmp_path / "depth_policy.json"
+    policy = {
+        "policy_env": {
+            "RIM_MAX_ANALYSIS_CYCLES": 2,
+            "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": 0.82,
+            "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": 1,
+            "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": 1,
+        }
+    }
+    saved_path = save_policy_artifact(
+        policy,
+        policy_kind="depth",
+        source_reports=["report-a.json"],
+        output_path=path,
+        learning_meta={"learning_rate": 0.35},
+    )
+    assert saved_path == path
+    payload = runner.load_report(path)
+    assert payload["policy_kind"] == "depth"
+    assert payload["policy_env"]["RIM_MAX_ANALYSIS_CYCLES"] == 2
+    assert payload["recommended_exports"]
+
+
+def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path) -> None:  # noqa: ANN001
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text('{"id":"ok-1","idea":"first idea"}\n', encoding="utf-8")
+    reports_dir = tmp_path / "reports"
+    depth_policy_path = tmp_path / "policies" / "depth_policy.json"
+    specialist_policy_path = tmp_path / "policies" / "specialist_policy.json"
+
+    payload = asyncio.run(
+        run_online_depth_arbitration_learning_loop(
+            orchestrator=MixedOutcomeOrchestrator(),
+            dataset_path=dataset,
+            mode="deep",
+            limit=1,
+            iterations=1,
+            lookback_reports=3,
+            target_quality=0.65,
+            target_runtime_sec=60.0,
+            learning_rate=0.4,
+            reports_dir=reports_dir,
+            depth_policy_path=depth_policy_path,
+            specialist_policy_path=specialist_policy_path,
+        )
+    )
+    assert payload["iterations"] == 1
+    assert depth_policy_path.exists() is True
+    assert specialist_policy_path.exists() is True
+    assert payload["final"]["training_report_count"] >= 1

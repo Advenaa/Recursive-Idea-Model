@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + memory/spawn/specialist-policy increments): `107` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + online depth/arbitration autolearn increments): `111` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -281,9 +281,9 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Learning layer:
   persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version/degradation telemetry, offline memory-policy training (`rim eval train-memory-policy`), and runtime policy loading (`RIM_MEMORY_POLICY_PATH`), but no online adaptive strategy learning/meta-model for decomposition/challenge/synthesis policy updates.
 - Orchestration depth/breadth policy:
-  recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration (`rim eval calibrate`, `rim eval train-policy`) available, but there is no learned depth-vs-breadth policy training yet.
+  recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration/training (`rim eval calibrate`, `rim eval train-policy`) and automated online update loop (`rim eval autolearn` with `RIM_DEPTH_POLICY_PATH`) available, but there is no RL-style learned depth-vs-breadth policy training yet.
 - Challenge reconciliation:
-  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, specialist follow-up arbitration loops, benchmark telemetry capture, and offline specialist-policy training/application (`rim eval train-specialist-policy` + `RIM_SPECIALIST_POLICY_PATH`) are implemented; online adaptive specialist policy updates are still missing.
+  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, specialist follow-up arbitration loops, benchmark telemetry capture, offline specialist-policy training/application (`rim eval train-specialist-policy` + `RIM_SPECIALIST_POLICY_PATH`), and automated online specialist-policy updates (`rim eval autolearn`) are implemented; RL-style adaptive arbitration policy learning is still missing.
 - Verification layer:
   deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, and baseline advanced adapters (`solver:`, `simulate:`, `data:`) are implemented, including pluggable external adapter command hooks; formal theorem/constraint tooling and production external integrations are still missing.
 - Specialization layer:
@@ -298,8 +298,8 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 
 ### 20.4 Gap-Closure Priorities
 
-1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration (`rim eval calibrate` + `rim eval calibrate-loop` implemented; policy-learning automation still pending).
-2. P0: evolve specialist arbitration from current offline-trained policy defaults to online adaptive specialist policy and dynamic role contracts.
+1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration and automated policy updates (`rim eval calibrate`, `rim eval calibrate-loop`, `rim eval autolearn` implemented).
+2. P0: evolve specialist arbitration from current heuristic+online-updated policy defaults to RL-style adaptive specialist policy and dynamic role contracts.
 3. P1: evolve specialization from current offline spawn policy + heuristic dynamic contracts to learned dynamic role/tool selection contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
 5. P2: evolve memory from current episodic/working/tool stores + offline policy tuning to online adaptive fold-quality optimization.

@@ -174,6 +174,7 @@ Environment variables:
 66. `RIM_ADV_VERIFY_EXTERNAL_DATA_CMD` optional command (external backend for `data:` checks)
 67. Reference adapter template: `scripts/advanced_verify_adapter.py` (stdin JSON -> stdout JSON contract)
 68. Optional adapter env: `RIM_ADV_VERIFY_ADAPTER_SOLVER_BACKEND=z3` (use z3 backend when available, fallback otherwise)
+69. `RIM_DEPTH_POLICY_PATH` optional JSON policy file (recommended output from `rim eval autolearn`) that applies depth-allocator defaults before env overrides
 
 ## 5) Modes and Runtime Controls
 
@@ -420,6 +421,7 @@ Additional eval commands:
 10. `rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into specialist-arbitration policy defaults.
 11. `rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into specialization spawn-policy defaults.
 12. `rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into memory-fold policy defaults.
+13. `rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35` to run benchmark cycles and auto-update depth + specialist policies from fresh telemetry.
 
 ## 9) Orchestration Logic
 

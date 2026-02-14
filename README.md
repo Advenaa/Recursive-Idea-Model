@@ -126,6 +126,7 @@ rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --tar
 rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
+rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35
 ```
 
 Provider env vars:
@@ -155,6 +156,8 @@ export RIM_MAX_ANALYSIS_CYCLES=1
 export RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE=0.78
 export RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS=2
 export RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS=1
+# Optional trained depth policy file (used by autolearn loop)
+export RIM_DEPTH_POLICY_PATH=rim/eval/policies/depth_policy.json
 export RIM_RECONCILE_CONSENSUS_MIN_AGENTS=3
 export RIM_RECONCILE_CONSENSUS_MIN_CONFIDENCE=0.7
 export RIM_RECONCILE_MIN_UNIQUE_CRITICS=3
@@ -168,7 +171,7 @@ export RIM_MEMORY_FOLD_MAX_ENTRIES=12
 export RIM_MEMORY_FOLD_NOVELTY_FLOOR=0.35
 export RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO=0.5
 # Optional trained memory policy file from `rim eval train-memory-policy` output
-export RIM_MEMORY_POLICY_PATH=rim/eval/reports/memory_policy.json
+export RIM_MEMORY_POLICY_PATH=rim/eval/policies/memory_policy.json
 export RIM_ENABLE_DISAGREEMENT_ARBITRATION=1
 export RIM_ARBITRATION_MAX_JOBS=2
 export RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION=1
@@ -178,14 +181,14 @@ export RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP=1
 export RIM_SPECIALIST_ARBITRATION_MAX_JOBS=2
 export RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE=0.78
 # Optional trained specialist policy file from `rim eval train-specialist-policy` output
-export RIM_SPECIALIST_POLICY_PATH=rim/eval/reports/specialist_policy.json
+export RIM_SPECIALIST_POLICY_PATH=rim/eval/policies/specialist_policy.json
 export RIM_SPAWN_MIN_ROLE_SCORE=1.0
 export RIM_SPAWN_MAX_SPECIALISTS_DEEP=3
 export RIM_SPAWN_MAX_SPECIALISTS_FAST=1
 export RIM_ENABLE_DYNAMIC_SPECIALISTS=1
 export RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS=2
 # Optional trained spawn policy file from `rim eval train-spawn-policy` output
-export RIM_SPAWN_POLICY_PATH=rim/eval/reports/spawn_policy.json
+export RIM_SPAWN_POLICY_PATH=rim/eval/policies/spawn_policy.json
 export RIM_ENABLE_EXECUTABLE_VERIFICATION=1
 export RIM_EXEC_VERIFY_MAX_CHECKS=5
 export RIM_ENABLE_PYTHON_EXEC_CHECKS=0

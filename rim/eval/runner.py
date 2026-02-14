@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,7 @@ from rim.eval.benchmark import evaluate_run
 
 DEFAULT_DATASET_PATH = Path("rim/eval/data/benchmark_ideas.jsonl")
 DEFAULT_REPORTS_DIR = Path("rim/eval/reports")
+DEFAULT_POLICIES_DIR = Path("rim/eval/policies")
 
 
 def load_dataset(path: Path) -> list[dict[str, Any]]:
@@ -1780,4 +1782,352 @@ def train_depth_policy(
         },
         "rationale": rationale,
         "samples": samples[:20],
+    }
+
+
+def _extract_policy_env(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    direct = {
+        key: value
+        for key, value in payload.items()
+        if isinstance(key, str) and key.startswith("RIM_")
+    }
+    if direct:
+        return direct
+    for key in ("policy_env", "recommended_env", "policy", "calibration"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            extracted = _extract_policy_env(nested)
+            if extracted:
+                return extracted
+    return {}
+
+
+def load_policy_env(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    try:
+        if not path.exists():
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return _extract_policy_env(payload)
+
+
+def save_policy_artifact(
+    policy: dict[str, Any],
+    *,
+    policy_kind: str,
+    source_reports: list[str],
+    output_path: Path | None = None,
+    learning_meta: dict[str, Any] | None = None,
+) -> Path:
+    env = policy.get("policy_env")
+    if not isinstance(env, dict):
+        raise ValueError("policy payload must include `policy_env`.")
+    payload = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "policy_kind": policy_kind,
+        "policy_env": env,
+        "recommended_exports": calibration_env_exports({"recommended_env": env}),
+        "source_reports": source_reports,
+        "learning_meta": learning_meta or {},
+        "policy": policy,
+    }
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return output_path
+
+    DEFAULT_POLICIES_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    auto_path = DEFAULT_POLICIES_DIR / f"{policy_kind}_policy_{stamp}.json"
+    auto_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return auto_path
+
+
+def _blend_depth_policy_env(
+    *,
+    prior_env: dict[str, Any] | None,
+    fresh_env: dict[str, Any],
+    learning_rate: float,
+) -> dict[str, Any]:
+    prior = prior_env or {}
+    alpha = _clamp_float(float(learning_rate), 0.0, 1.0)
+    min_conf = (1.0 - alpha) * _to_float(prior.get("RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE"), 0.78)
+    min_conf += alpha * _to_float(fresh_env.get("RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE"), 0.78)
+    max_risks = (1.0 - alpha) * _to_float(prior.get("RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS"), 2.0)
+    max_risks += alpha * _to_float(fresh_env.get("RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS"), 2.0)
+    max_high = (1.0 - alpha) * _to_float(prior.get("RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS"), 1.0)
+    max_high += alpha * _to_float(fresh_env.get("RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS"), 1.0)
+    max_cycles = (1.0 - alpha) * _to_float(prior.get("RIM_MAX_ANALYSIS_CYCLES"), 1.0)
+    max_cycles += alpha * _to_float(fresh_env.get("RIM_MAX_ANALYSIS_CYCLES"), 1.0)
+    return {
+        "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": round(_clamp_float(min_conf, 0.65, 0.93), 3),
+        "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": _clamp_int(int(round(max_risks)), 0, 4),
+        "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": _clamp_int(int(round(max_high)), 0, 3),
+        "RIM_MAX_ANALYSIS_CYCLES": _clamp_int(int(round(max_cycles)), 1, 4),
+    }
+
+
+def _blend_specialist_policy_env(
+    *,
+    prior_env: dict[str, Any] | None,
+    fresh_env: dict[str, Any],
+    learning_rate: float,
+) -> dict[str, Any]:
+    prior = prior_env or {}
+    alpha = _clamp_float(float(learning_rate), 0.0, 1.0)
+    enable_prior = _to_float(prior.get("RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP"), 1.0)
+    enable_fresh = _to_float(fresh_env.get("RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP"), 1.0)
+    enable_score = ((1.0 - alpha) * enable_prior) + (alpha * enable_fresh)
+    max_jobs = (1.0 - alpha) * _to_float(prior.get("RIM_SPECIALIST_ARBITRATION_MAX_JOBS"), 2.0)
+    max_jobs += alpha * _to_float(fresh_env.get("RIM_SPECIALIST_ARBITRATION_MAX_JOBS"), 2.0)
+    min_conf = (1.0 - alpha) * _to_float(prior.get("RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"), 0.78)
+    min_conf += alpha * _to_float(fresh_env.get("RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"), 0.78)
+    enable_loop = 1 if enable_score >= 0.5 else 0
+    normalized_jobs = _clamp_int(int(round(max_jobs)), 0, 6)
+    if enable_loop == 0:
+        normalized_jobs = 0
+    return {
+        "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": enable_loop,
+        "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": normalized_jobs,
+        "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": round(
+            _clamp_float(min_conf, 0.6, 0.95),
+            3,
+        ),
+    }
+
+
+def _valid_training_reports(
+    reports: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    valid: list[dict[str, Any]] = []
+    report_ids: list[str] = []
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        if int(report.get("dataset_size", 0)) <= 0:
+            continue
+        valid.append(report)
+        report_ids.append(
+            str(report.get("created_at") or f"report-{len(report_ids) + 1}")
+        )
+    return valid, report_ids
+
+
+def train_online_depth_and_arbitration_policies(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+    learning_rate: float = 0.35,
+    prior_depth_policy_env: dict[str, Any] | None = None,
+    prior_specialist_policy_env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    valid_reports, report_ids = _valid_training_reports(reports)
+    depth_candidate = train_depth_policy(
+        valid_reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+    )
+    specialist_candidate = train_specialist_arbitration_policy(
+        valid_reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+    )
+    alpha = _clamp_float(float(learning_rate), 0.0, 1.0)
+    depth_env = _blend_depth_policy_env(
+        prior_env=prior_depth_policy_env,
+        fresh_env=dict(depth_candidate.get("policy_env") or {}),
+        learning_rate=alpha,
+    )
+    specialist_env = _blend_specialist_policy_env(
+        prior_env=prior_specialist_policy_env,
+        fresh_env=dict(specialist_candidate.get("policy_env") or {}),
+        learning_rate=alpha,
+    )
+    depth_payload = {
+        **depth_candidate,
+        "policy_env": depth_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": depth_env}),
+        "blend": {
+            "learning_rate": alpha,
+            "prior_policy_env": prior_depth_policy_env or {},
+            "candidate_policy_env": depth_candidate.get("policy_env") or {},
+        },
+    }
+    specialist_payload = {
+        **specialist_candidate,
+        "policy_env": specialist_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": specialist_env}),
+        "blend": {
+            "learning_rate": alpha,
+            "prior_policy_env": prior_specialist_policy_env or {},
+            "candidate_policy_env": specialist_candidate.get("policy_env") or {},
+        },
+    }
+    combined_exports = sorted(
+        set(
+            list(depth_payload["recommended_exports"])
+            + list(specialist_payload["recommended_exports"])
+        )
+    )
+    return {
+        "report_count": len(valid_reports),
+        "report_ids": report_ids,
+        "learning_rate": alpha,
+        "target_quality": target_quality,
+        "target_runtime_sec": target_runtime_sec,
+        "depth_policy": depth_payload,
+        "specialist_policy": specialist_payload,
+        "recommended_exports": combined_exports,
+    }
+
+
+def _load_recent_reports(
+    *,
+    reports_dir: Path,
+    lookback_reports: int,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if lookback_reports <= 0:
+        return [], []
+    paths = list_reports(reports_dir)
+    selected_paths = paths[-lookback_reports:]
+    reports: list[dict[str, Any]] = []
+    used_paths: list[str] = []
+    for path in selected_paths:
+        try:
+            report = load_report(path)
+        except Exception:  # noqa: BLE001
+            continue
+        if int(report.get("dataset_size", 0)) <= 0:
+            continue
+        reports.append(report)
+        used_paths.append(str(path))
+    return reports, used_paths
+
+
+async def run_online_depth_arbitration_learning_loop(
+    orchestrator: RimOrchestrator,
+    *,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    mode: str = "deep",
+    limit: int | None = None,
+    iterations: int = 2,
+    lookback_reports: int = 6,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+    learning_rate: float = 0.35,
+    reports_dir: Path = DEFAULT_REPORTS_DIR,
+    depth_policy_path: Path = DEFAULT_POLICIES_DIR / "depth_policy.json",
+    specialist_policy_path: Path = DEFAULT_POLICIES_DIR / "specialist_policy.json",
+) -> dict[str, Any]:
+    cycles = _clamp_int(int(iterations), 1, 24)
+    lookback = _clamp_int(int(lookback_reports), 1, 60)
+    alpha = _clamp_float(float(learning_rate), 0.05, 1.0)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    depth_policy_path.parent.mkdir(parents=True, exist_ok=True)
+    specialist_policy_path.parent.mkdir(parents=True, exist_ok=True)
+
+    previous_depth_path = os.getenv("RIM_DEPTH_POLICY_PATH")
+    previous_specialist_path = os.getenv("RIM_SPECIALIST_POLICY_PATH")
+    os.environ["RIM_DEPTH_POLICY_PATH"] = str(depth_policy_path)
+    os.environ["RIM_SPECIALIST_POLICY_PATH"] = str(specialist_policy_path)
+    cycle_outputs: list[dict[str, Any]] = []
+    try:
+        for cycle in range(1, cycles + 1):
+            report = await run_benchmark(
+                orchestrator=orchestrator,
+                dataset_path=dataset_path,
+                mode=mode,
+                limit=limit,
+            )
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+            report_path = reports_dir / f"autolearn_{stamp}_cycle{cycle:02d}.json"
+            save_report(report, report_path)
+
+            training_reports, training_paths = _load_recent_reports(
+                reports_dir=reports_dir,
+                lookback_reports=lookback,
+            )
+            prior_depth_env = load_policy_env(depth_policy_path)
+            prior_specialist_env = load_policy_env(specialist_policy_path)
+            learning = train_online_depth_and_arbitration_policies(
+                training_reports,
+                target_quality=target_quality,
+                target_runtime_sec=target_runtime_sec,
+                learning_rate=alpha,
+                prior_depth_policy_env=prior_depth_env,
+                prior_specialist_policy_env=prior_specialist_env,
+            )
+            depth_save_path = save_policy_artifact(
+                learning["depth_policy"],
+                policy_kind="depth",
+                source_reports=training_paths,
+                output_path=depth_policy_path,
+                learning_meta={
+                    "cycle": cycle,
+                    "iterations": cycles,
+                    "learning_rate": alpha,
+                    "report_path": str(report_path),
+                },
+            )
+            specialist_save_path = save_policy_artifact(
+                learning["specialist_policy"],
+                policy_kind="specialist_arbitration",
+                source_reports=training_paths,
+                output_path=specialist_policy_path,
+                learning_meta={
+                    "cycle": cycle,
+                    "iterations": cycles,
+                    "learning_rate": alpha,
+                    "report_path": str(report_path),
+                },
+            )
+            cycle_outputs.append(
+                {
+                    "cycle": cycle,
+                    "report_path": str(report_path),
+                    "report_summary": {
+                        "average_quality_score": report.get("average_quality_score"),
+                        "average_runtime_sec": report.get("average_runtime_sec"),
+                        "dataset_size": report.get("dataset_size"),
+                        "failure_count": report.get("failure_count"),
+                    },
+                    "training_report_count": len(training_reports),
+                    "depth_policy_path": str(depth_save_path),
+                    "specialist_policy_path": str(specialist_save_path),
+                    "depth_policy_env": learning["depth_policy"]["policy_env"],
+                    "specialist_policy_env": learning["specialist_policy"]["policy_env"],
+                }
+            )
+    finally:
+        if previous_depth_path is None:
+            os.environ.pop("RIM_DEPTH_POLICY_PATH", None)
+        else:
+            os.environ["RIM_DEPTH_POLICY_PATH"] = previous_depth_path
+        if previous_specialist_path is None:
+            os.environ.pop("RIM_SPECIALIST_POLICY_PATH", None)
+        else:
+            os.environ["RIM_SPECIALIST_POLICY_PATH"] = previous_specialist_path
+
+    return {
+        "mode": mode,
+        "dataset_path": str(dataset_path),
+        "iterations": cycles,
+        "lookback_reports": lookback,
+        "learning_rate": alpha,
+        "target_quality": target_quality,
+        "target_runtime_sec": target_runtime_sec,
+        "depth_policy_path": str(depth_policy_path),
+        "specialist_policy_path": str(specialist_policy_path),
+        "recommended_exports": [
+            f"export RIM_DEPTH_POLICY_PATH={depth_policy_path}",
+            f"export RIM_SPECIALIST_POLICY_PATH={specialist_policy_path}",
+        ],
+        "cycles": cycle_outputs,
+        "final": cycle_outputs[-1] if cycle_outputs else None,
     }

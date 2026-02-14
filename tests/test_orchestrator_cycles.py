@@ -662,6 +662,94 @@ def test_orchestrator_applies_specialist_policy_file(
     assert arbitration_logs[0].meta["specialist_policy_path"] == str(policy_path)
 
 
+def test_orchestrator_applies_depth_policy_file(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    async def fake_decompose(*args, **kwargs):  # noqa: ANN001, ANN202
+        root = DecompositionNode(
+            depth=0,
+            component_text="Idea D5",
+            node_type="claim",
+            confidence=0.4,
+        )
+        return [root], "codex", {"stop_reason": "max_depth"}
+
+    async def fake_critics(*args, **kwargs):  # noqa: ANN001, ANN202
+        nodes = kwargs.get("nodes") or args[1]
+        return [
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="logic",
+                issue="No rollout criteria",
+                severity="high",
+                confidence=0.8,
+                suggested_fix="Define criteria",
+                provider="codex",
+            ),
+        ]
+
+    async def fake_synthesize(*args, **kwargs):  # noqa: ANN001, ANN202
+        return (
+            {
+                "synthesized_idea": "Idea D5 refined",
+                "changes_summary": ["Added rollout gating rules."],
+                "residual_risks": [],
+                "next_experiments": ["Test rollout gates on staging."],
+                "confidence_score": 0.82,
+            },
+            ["claude"],
+        )
+
+    policy_path = tmp_path / "depth_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "policy_env": {
+                        "RIM_MAX_ANALYSIS_CYCLES": 2,
+                        "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": 0.89,
+                        "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": 1,
+                        "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": 0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(orchestrator_module, "decompose_idea", fake_decompose)
+    monkeypatch.setattr(orchestrator_module, "run_critics", fake_critics)
+    monkeypatch.setattr(orchestrator_module, "synthesize_idea", fake_synthesize)
+    monkeypatch.setenv("RIM_DEPTH_POLICY_PATH", str(policy_path))
+    monkeypatch.delenv("RIM_MAX_ANALYSIS_CYCLES", raising=False)
+    monkeypatch.delenv("RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE", raising=False)
+    monkeypatch.delenv("RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS", raising=False)
+    monkeypatch.delenv("RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS", raising=False)
+
+    repo = RunRepository(db_path=tmp_path / "rim_orchestrator_depth_policy.db")
+    orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
+    request = AnalyzeRequest(idea="Idea D5", mode="deep")
+    run_id = orchestrator.create_run(request, status="running")
+
+    result = asyncio.run(orchestrator.execute_run(run_id, request))
+    assert result.synthesized_idea == "Idea D5 refined"
+
+    depth_logs = [
+        log
+        for log in orchestrator.get_run_logs(run_id).logs
+        if log.stage == "depth_allocator"
+    ]
+    assert len(depth_logs) >= 1
+    latest = depth_logs[-1]
+    assert latest.meta["depth_policy_applied"] is True
+    assert latest.meta["depth_policy_path"] == str(policy_path)
+    assert latest.meta["max_cycles"] == 2
+    assert latest.meta["min_confidence_to_stop"] == 0.89
+    assert latest.meta["max_residual_risks_to_stop"] == 1
+    assert latest.meta["max_high_findings_to_stop"] == 0
+
+
 def test_orchestrator_applies_memory_policy_file(
     tmp_path: Path,
     monkeypatch,  # noqa: ANN001

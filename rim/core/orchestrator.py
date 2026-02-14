@@ -239,6 +239,28 @@ def _load_specialist_policy_env(path_value: str) -> tuple[dict[str, object], str
     return filtered, None
 
 
+def _load_depth_policy_env(path_value: str) -> tuple[dict[str, object], str | None]:
+    path = str(path_value or "").strip()
+    if not path:
+        return {}, None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.loads(handle.read())
+    except Exception as exc:  # noqa: BLE001
+        return {}, str(exc)
+    env = _extract_policy_env(payload)
+    allowed = {
+        "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE",
+        "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS",
+        "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS",
+        "RIM_MAX_ANALYSIS_CYCLES",
+    }
+    filtered = {key: value for key, value in env.items() if key in allowed}
+    if not filtered:
+        return {}, "No depth-allocator keys found in policy file."
+    return filtered, None
+
+
 def _load_memory_policy_env(path_value: str) -> tuple[dict[str, object], str | None]:
     path = str(path_value or "").strip()
     if not path:
@@ -332,27 +354,61 @@ class RimOrchestrator:
                 lower=1,
                 upper=3650,
             )
+            depth_policy_path = str(os.getenv("RIM_DEPTH_POLICY_PATH", "")).strip()
+            depth_policy_env: dict[str, object] = {}
+            depth_policy_error: str | None = None
+            if depth_policy_path:
+                depth_policy_env, depth_policy_error = _load_depth_policy_env(depth_policy_path)
+            max_cycles_default = 1
+            min_confidence_default = 0.78
+            max_residual_risks_default = 2
+            max_high_findings_default = 1
+            if depth_policy_env:
+                max_cycles_default = _coerce_int(
+                    depth_policy_env.get("RIM_MAX_ANALYSIS_CYCLES"),
+                    max_cycles_default,
+                    lower=1,
+                    upper=6,
+                )
+                min_confidence_default = _coerce_float(
+                    depth_policy_env.get("RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE"),
+                    min_confidence_default,
+                    lower=0.0,
+                    upper=1.0,
+                )
+                max_residual_risks_default = _coerce_int(
+                    depth_policy_env.get("RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS"),
+                    max_residual_risks_default,
+                    lower=0,
+                    upper=20,
+                )
+                max_high_findings_default = _coerce_int(
+                    depth_policy_env.get("RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS"),
+                    max_high_findings_default,
+                    lower=0,
+                    upper=20,
+                )
             max_cycles = _parse_int_env(
                 "RIM_MAX_ANALYSIS_CYCLES",
-                1,
+                max_cycles_default,
                 lower=1,
                 upper=6,
             )
             min_confidence_to_stop = _parse_float_env(
                 "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE",
-                0.78,
+                min_confidence_default,
                 lower=0.0,
                 upper=1.0,
             )
             max_residual_risks_to_stop = _parse_int_env(
                 "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS",
-                2,
+                max_residual_risks_default,
                 lower=0,
                 upper=20,
             )
             max_high_findings_to_stop = _parse_int_env(
                 "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS",
-                1,
+                max_high_findings_default,
                 lower=0,
                 upper=20,
             )
@@ -597,6 +653,9 @@ class RimOrchestrator:
                 meta={
                     "mode": request.mode,
                     "max_cycles": max_cycles,
+                    "depth_policy_applied": bool(depth_policy_env),
+                    "depth_policy_path": depth_policy_path or None,
+                    "depth_policy_error": depth_policy_error,
                     "memory_policy_applied": bool(memory_policy_env),
                     "memory_policy_path": memory_policy_path or None,
                     "memory_policy_error": memory_policy_error,
@@ -1018,6 +1077,13 @@ class RimOrchestrator:
                     meta={
                         "cycle": cycle,
                         "decision": decision.__dict__,
+                        "max_cycles": max_cycles,
+                        "min_confidence_to_stop": min_confidence_to_stop,
+                        "max_residual_risks_to_stop": max_residual_risks_to_stop,
+                        "max_high_findings_to_stop": max_high_findings_to_stop,
+                        "depth_policy_applied": bool(depth_policy_env),
+                        "depth_policy_path": depth_policy_path or None,
+                        "depth_policy_error": depth_policy_error,
                     },
                 )
                 cycles_completed = cycle

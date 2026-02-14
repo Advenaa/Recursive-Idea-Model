@@ -18,6 +18,7 @@ from rim.eval.runner import (
     evaluate_regression_gate,
     list_reports,
     load_report,
+    run_online_depth_arbitration_learning_loop,
     run_benchmark,
     run_duel_benchmark,
     run_single_pass_baseline,
@@ -470,6 +471,30 @@ async def _cmd_eval_calibrate_loop(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_eval_autolearn(args: argparse.Namespace) -> int:
+    orchestrator = _build_orchestrator()
+    dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
+    reports_dir = Path(args.reports_dir) if args.reports_dir else DEFAULT_REPORTS_DIR
+    payload = await run_online_depth_arbitration_learning_loop(
+        orchestrator=orchestrator,
+        dataset_path=dataset,
+        mode=args.mode,
+        limit=args.limit,
+        iterations=args.iterations,
+        lookback_reports=args.lookback_reports,
+        target_quality=args.target_quality,
+        target_runtime_sec=args.target_runtime_sec,
+        learning_rate=args.learning_rate,
+        reports_dir=reports_dir,
+        depth_policy_path=Path(args.depth_policy_path),
+        specialist_policy_path=Path(args.specialist_policy_path),
+    )
+    if args.save:
+        Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rim")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -612,6 +637,28 @@ def build_parser() -> argparse.ArgumentParser:
     eval_train_memory_policy.add_argument("--target-quality", type=float, default=0.65)
     eval_train_memory_policy.add_argument("--target-runtime-sec", type=float)
     eval_train_memory_policy.add_argument("--save")
+    eval_autolearn = eval_sub.add_parser(
+        "autolearn",
+        help="Run benchmark iterations and auto-update depth + specialist policies from fresh telemetry",
+    )
+    eval_autolearn.add_argument("--dataset")
+    eval_autolearn.add_argument("--mode", choices=["deep", "fast"], default="deep")
+    eval_autolearn.add_argument("--limit", type=int)
+    eval_autolearn.add_argument("--iterations", type=int, default=2)
+    eval_autolearn.add_argument("--lookback-reports", type=int, default=6)
+    eval_autolearn.add_argument("--target-quality", type=float, default=0.65)
+    eval_autolearn.add_argument("--target-runtime-sec", type=float)
+    eval_autolearn.add_argument("--learning-rate", type=float, default=0.35)
+    eval_autolearn.add_argument("--reports-dir")
+    eval_autolearn.add_argument(
+        "--depth-policy-path",
+        default="rim/eval/policies/depth_policy.json",
+    )
+    eval_autolearn.add_argument(
+        "--specialist-policy-path",
+        default="rim/eval/policies/specialist_policy.json",
+    )
+    eval_autolearn.add_argument("--save")
 
     sub.add_parser("health", help="Healthcheck DB and providers")
     return parser
@@ -660,6 +707,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_train_spawn_policy(args))
     if args.command == "eval" and args.eval_command == "train-memory-policy":
         raise SystemExit(_cmd_eval_train_memory_policy(args))
+    if args.command == "eval" and args.eval_command == "autolearn":
+        raise SystemExit(asyncio.run(_cmd_eval_autolearn(args)))
     if args.command == "health":
         raise SystemExit(asyncio.run(_cmd_health()))
     raise SystemExit(1)
