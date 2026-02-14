@@ -406,6 +406,7 @@ Additional eval commands:
 4. `rim eval gate --base <report_a> --target <report_b> --min-quality-delta 0.0 --max-runtime-delta-sec 15` for pass/fail regression checks.
 5. `rim eval duel --mode deep --limit 10 --min-quality-delta 0.0` to run baseline + RIM benchmark and gate in one step.
 6. `rim eval blindpack --report <report.json> --limit 20 --save blind_review.json` to generate anonymized review packets.
+7. `rim eval calibrate --report <report.json> --target-quality 0.65 --target-runtime-sec 60` to recommend depth-allocator env settings from benchmark signals.
 
 ## 9) Orchestration Logic
 

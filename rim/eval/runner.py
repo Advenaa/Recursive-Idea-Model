@@ -547,3 +547,96 @@ def evaluate_regression_gate(
             "min_shared_runs": min_shared_runs,
         },
     }
+
+
+def _clamp_float(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
+
+
+def _clamp_int(value: int, lower: int, upper: int) -> int:
+    return max(lower, min(upper, value))
+
+
+def calibrate_depth_allocator(
+    report: dict[str, Any],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    avg_quality = float(report.get("average_quality_score", 0.0))
+    avg_runtime = float(report.get("average_runtime_sec", 0.0))
+    dataset_size = max(1, int(report.get("dataset_size", 1)))
+    failures = int(report.get("failure_count", 0))
+    failure_rate = failures / float(dataset_size)
+
+    quality_gap = float(target_quality) - avg_quality
+    quality_pressure = quality_gap / max(float(target_quality), 0.05)
+    runtime_pressure = 0.0
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        runtime_pressure = (avg_runtime - float(target_runtime_sec)) / float(target_runtime_sec)
+
+    depth_pressure = quality_pressure - (0.6 * runtime_pressure) - (0.4 * failure_rate)
+    depth_pressure = _clamp_float(depth_pressure, -1.0, 1.0)
+
+    base = {
+        "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": 0.78,
+        "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": 2,
+        "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": 1,
+        "RIM_MAX_ANALYSIS_CYCLES": 1,
+    }
+    suggested_min_conf = round(_clamp_float(base["RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE"] + (0.10 * depth_pressure), 0.65, 0.93), 3)
+    suggested_max_risks = _clamp_int(
+        int(round(base["RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS"] - (1.5 * depth_pressure))),
+        0,
+        4,
+    )
+    suggested_max_high = _clamp_int(
+        int(round(base["RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS"] - (1.0 * depth_pressure))),
+        0,
+        3,
+    )
+    suggested_max_cycles = _clamp_int(
+        int(round(base["RIM_MAX_ANALYSIS_CYCLES"] + (2.0 * max(0.0, depth_pressure)))),
+        1,
+        4,
+    )
+
+    rationale: list[str] = []
+    if depth_pressure > 0.2:
+        rationale.append("Quality is below target; increase analytical depth and stricter stop thresholds.")
+    elif depth_pressure < -0.2:
+        rationale.append("Runtime/failure pressure is high; relax depth to stabilize throughput.")
+    else:
+        rationale.append("Current depth profile is near target; keep moderate settings.")
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        if avg_runtime > float(target_runtime_sec):
+            rationale.append("Average runtime exceeds target runtime budget.")
+        else:
+            rationale.append("Average runtime is within target runtime budget.")
+    if failure_rate > 0.2:
+        rationale.append("Failure rate is elevated; avoid aggressive depth expansion until reliability improves.")
+
+    env = {
+        "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": suggested_min_conf,
+        "RIM_DEPTH_ALLOCATOR_MAX_RESIDUAL_RISKS": suggested_max_risks,
+        "RIM_DEPTH_ALLOCATOR_MAX_HIGH_FINDINGS": suggested_max_high,
+        "RIM_MAX_ANALYSIS_CYCLES": suggested_max_cycles,
+    }
+    return {
+        "inputs": {
+            "average_quality_score": avg_quality,
+            "average_runtime_sec": avg_runtime,
+            "failure_rate": round(failure_rate, 4),
+            "dataset_size": dataset_size,
+            "target_quality": float(target_quality),
+            "target_runtime_sec": target_runtime_sec,
+        },
+        "signals": {
+            "quality_pressure": round(quality_pressure, 4),
+            "runtime_pressure": round(runtime_pressure, 4),
+            "depth_pressure": round(depth_pressure, 4),
+        },
+        "base": base,
+        "recommended_env": env,
+        "rationale": rationale,
+    }

@@ -6,6 +6,7 @@ from rim.core.schemas import AnalyzeResult, DecompositionNode
 from rim.eval import runner
 from rim.eval.runner import (
     build_blind_review_packet,
+    calibrate_depth_allocator,
     compare_reports,
     evaluate_regression_gate,
     run_benchmark,
@@ -313,3 +314,37 @@ def test_save_blind_review_packet_auto_paths_are_unique(tmp_path) -> None:  # no
     finally:
         runner.DEFAULT_REPORTS_DIR = original_reports_dir
     assert path_a != path_b
+
+
+def test_calibrate_depth_allocator_recommends_more_depth_for_low_quality() -> None:
+    report = {
+        "dataset_size": 10,
+        "average_quality_score": 0.45,
+        "average_runtime_sec": 30.0,
+        "failure_count": 1,
+    }
+    calibration = calibrate_depth_allocator(
+        report,
+        target_quality=0.7,
+        target_runtime_sec=60.0,
+    )
+    env = calibration["recommended_env"]
+    assert env["RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE"] > 0.78
+    assert env["RIM_MAX_ANALYSIS_CYCLES"] >= 2
+
+
+def test_calibrate_depth_allocator_recommends_less_depth_for_runtime_pressure() -> None:
+    report = {
+        "dataset_size": 10,
+        "average_quality_score": 0.7,
+        "average_runtime_sec": 140.0,
+        "failure_count": 3,
+    }
+    calibration = calibrate_depth_allocator(
+        report,
+        target_quality=0.65,
+        target_runtime_sec=60.0,
+    )
+    env = calibration["recommended_env"]
+    assert env["RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE"] < 0.78
+    assert env["RIM_MAX_ANALYSIS_CYCLES"] == 1

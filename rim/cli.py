@@ -12,6 +12,7 @@ from rim.eval.runner import (
     DEFAULT_DATASET_PATH,
     DEFAULT_REPORTS_DIR,
     build_blind_review_packet,
+    calibrate_depth_allocator,
     compare_reports,
     evaluate_regression_gate,
     list_reports,
@@ -323,6 +324,33 @@ def _cmd_eval_blindpack(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_calibrate_report_path(args: argparse.Namespace) -> Path:
+    if args.report:
+        return Path(args.report)
+    reports = list_reports(DEFAULT_REPORTS_DIR)
+    if not reports:
+        raise ValueError("No saved reports available for calibration.")
+    return reports[-1]
+
+
+def _cmd_eval_calibrate(args: argparse.Namespace) -> int:
+    report_path = _resolve_calibrate_report_path(args)
+    report = load_report(report_path)
+    calibration = calibrate_depth_allocator(
+        report,
+        target_quality=args.target_quality,
+        target_runtime_sec=args.target_runtime_sec,
+    )
+    payload = {
+        "source_report": str(report_path),
+        "calibration": calibration,
+    }
+    if args.save:
+        Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rim")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -410,6 +438,14 @@ def build_parser() -> argparse.ArgumentParser:
     eval_blindpack.add_argument("--report")
     eval_blindpack.add_argument("--limit", type=int)
     eval_blindpack.add_argument("--save")
+    eval_calibrate = eval_sub.add_parser(
+        "calibrate",
+        help="Recommend depth-allocator settings from benchmark report",
+    )
+    eval_calibrate.add_argument("--report")
+    eval_calibrate.add_argument("--target-quality", type=float, default=0.65)
+    eval_calibrate.add_argument("--target-runtime-sec", type=float)
+    eval_calibrate.add_argument("--save")
 
     sub.add_parser("health", help="Healthcheck DB and providers")
     return parser
@@ -446,6 +482,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_gate(args))
     if args.command == "eval" and args.eval_command == "blindpack":
         raise SystemExit(_cmd_eval_blindpack(args))
+    if args.command == "eval" and args.eval_command == "calibrate":
+        raise SystemExit(_cmd_eval_calibrate(args))
     if args.command == "health":
         raise SystemExit(asyncio.run(_cmd_health()))
     raise SystemExit(1)

@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + externalized verification increments): `93` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + calibration increments): `95` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -298,7 +298,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 
 ### 20.4 Gap-Closure Priorities
 
-1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration.
+1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration (`rim eval calibrate` implemented; iterative tuning loop still pending).
 2. P0: extend critique reconciliation from baseline role-diversity guardrails to specialist adaptive arbitration loops.
 3. P1: add specialization layer with dynamic role/tool selection contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
