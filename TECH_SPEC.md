@@ -140,10 +140,13 @@ Environment variables:
 32. `RIM_MEMORY_FOLD_MAX_ENTRIES` default `12` (max folded context entries carried to next cycle)
 33. `RIM_ENABLE_DISAGREEMENT_ARBITRATION` default `1` in deep mode (resolve critique disagreements before synthesis)
 34. `RIM_ARBITRATION_MAX_JOBS` default `2` (max disagreement arbitration calls per cycle)
-35. `RIM_ENABLE_EXECUTABLE_VERIFICATION` default `1` in deep mode (run safe executable checks from prefixed constraints)
-36. `RIM_EXEC_VERIFY_MAX_CHECKS` default `5` (max executable constraint checks per cycle)
-37. `RIM_ENABLE_PYTHON_EXEC_CHECKS` default `0` (allow `python_exec:` subprocess checks)
-38. `RIM_PYTHON_EXEC_TIMEOUT_SEC` default `2` (timeout per `python_exec:` check)
+35. `RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION` default `1` in deep mode (run follow-up devil's-advocate arbitration on low-confidence/escalated decisions)
+36. `RIM_DEVILS_ADVOCATE_ROUNDS` default `1` (max devil's-advocate rounds per cycle)
+37. `RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE` default `0.72` (minimum arbitration confidence before triggering devil follow-up)
+38. `RIM_ENABLE_EXECUTABLE_VERIFICATION` default `1` in deep mode (run safe executable checks from prefixed constraints)
+39. `RIM_EXEC_VERIFY_MAX_CHECKS` default `5` (max executable constraint checks per cycle)
+40. `RIM_ENABLE_PYTHON_EXEC_CHECKS` default `0` (allow `python_exec:` subprocess checks)
+41. `RIM_PYTHON_EXEC_TIMEOUT_SEC` default `2` (timeout per `python_exec:` check)
 
 ## 5) Modes and Runtime Controls
 
@@ -395,7 +398,7 @@ Additional eval commands:
 4. `decompose` (cycle N)
 5. `challenge_parallel` (cycle N)
 6. `challenge_reconciliation` (consensus/disagreement aggregation)
-7. `challenge_arbitration` (optional disagreement resolution calls)
+7. `challenge_arbitration` (optional disagreement resolution calls, including devil's-advocate follow-up rounds)
 8. `synthesis` (cycle N)
 9. `verification` (deterministic constraint/risk coverage checks)
 10. `verification_executable` (safe expression checks for prefixed executable constraints)

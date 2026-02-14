@@ -32,6 +32,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 
 - FastAPI service (`rim/api/app.py`)
 - Orchestrator pipeline with recursive stop conditions (`rim/core/orchestrator.py`)
+- Multi-round disagreement arbitration with devil's-advocate follow-ups (`rim/agents/arbitrator.py`)
 - Persistent API job queue (resume queued/running jobs on restart) (`rim/api/job_queue.py`)
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
 - SQLite persistence + memory context reuse (`rim/storage/`)
@@ -156,6 +157,9 @@ export RIM_ENABLE_MEMORY_FOLDING=1
 export RIM_MEMORY_FOLD_MAX_ENTRIES=12
 export RIM_ENABLE_DISAGREEMENT_ARBITRATION=1
 export RIM_ARBITRATION_MAX_JOBS=2
+export RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION=1
+export RIM_DEVILS_ADVOCATE_ROUNDS=1
+export RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE=0.72
 export RIM_ENABLE_EXECUTABLE_VERIFICATION=1
 export RIM_EXEC_VERIFY_MAX_CHECKS=5
 export RIM_ENABLE_PYTHON_EXEC_CHECKS=0

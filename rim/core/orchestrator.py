@@ -333,6 +333,22 @@ class RimOrchestrator:
                 lower=0,
                 upper=6,
             )
+            enable_devils_advocate_arbitration = _parse_bool_env(
+                "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION",
+                request.mode == "deep",
+            )
+            devils_advocate_rounds = _parse_int_env(
+                "RIM_DEVILS_ADVOCATE_ROUNDS",
+                1,
+                lower=0,
+                upper=3,
+            )
+            devils_advocate_min_confidence = _parse_float_env(
+                "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE",
+                0.72,
+                lower=0.0,
+                upper=1.0,
+            )
             self.repository.mark_run_status(run_id=run_id, status="running")
             self.repository.log_stage(
                 run_id=run_id,
@@ -443,6 +459,19 @@ class RimOrchestrator:
                             reconciliation=reconciliation,
                             findings=findings,
                             max_jobs=arbitration_max_jobs,
+                            devils_advocate_rounds=(
+                                devils_advocate_rounds
+                                if enable_devils_advocate_arbitration
+                                else 0
+                            ),
+                            devils_advocate_min_confidence=devils_advocate_min_confidence,
+                        )
+                        devils_advocate_count = len(
+                            [
+                                item
+                                for item in arbitrations
+                                if str(item.get("round", "")).startswith("devil_")
+                            ]
                         )
                         self.repository.log_stage(
                             run_id=run_id,
@@ -457,6 +486,14 @@ class RimOrchestrator:
                                     int(reconciliation["summary"]["disagreement_count"]),
                                 ),
                                 "resolved_count": len(arbitrations),
+                                "devils_advocate_enabled": enable_devils_advocate_arbitration,
+                                "devils_advocate_rounds": (
+                                    devils_advocate_rounds
+                                    if enable_devils_advocate_arbitration
+                                    else 0
+                                ),
+                                "devils_advocate_min_confidence": devils_advocate_min_confidence,
+                                "devils_advocate_count": devils_advocate_count,
                             },
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -467,6 +504,13 @@ class RimOrchestrator:
                             latency_ms=int((time.perf_counter() - arbitration_started) * 1000),
                             meta={
                                 "cycle": cycle,
+                                "devils_advocate_enabled": enable_devils_advocate_arbitration,
+                                "devils_advocate_rounds": (
+                                    devils_advocate_rounds
+                                    if enable_devils_advocate_arbitration
+                                    else 0
+                                ),
+                                "devils_advocate_min_confidence": devils_advocate_min_confidence,
                                 "error": _error_from_exception(exc, default_stage="challenge_arbitration"),
                             },
                         )
