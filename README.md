@@ -32,7 +32,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 
 - FastAPI service (`rim/api/app.py`)
 - Orchestrator pipeline with recursive stop conditions (`rim/core/orchestrator.py`)
-- Multi-round disagreement arbitration with devil's-advocate follow-ups (`rim/agents/arbitrator.py`)
+- Multi-round disagreement arbitration with devil's-advocate + specialist follow-up loops (`rim/agents/arbitrator.py`)
 - Advanced verification adapters (`solver:`, `simulate:`, `data:`) (`rim/agents/advanced_verifier.py`)
 - Persistent API job queue (resume queued/running jobs on restart) (`rim/api/job_queue.py`)
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
@@ -167,6 +167,9 @@ export RIM_ARBITRATION_MAX_JOBS=2
 export RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION=1
 export RIM_DEVILS_ADVOCATE_ROUNDS=1
 export RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE=0.72
+export RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP=1
+export RIM_SPECIALIST_ARBITRATION_MAX_JOBS=2
+export RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE=0.78
 export RIM_SPAWN_MIN_ROLE_SCORE=1.0
 export RIM_SPAWN_MAX_SPECIALISTS_DEEP=3
 export RIM_SPAWN_MAX_SPECIALISTS_FAST=1

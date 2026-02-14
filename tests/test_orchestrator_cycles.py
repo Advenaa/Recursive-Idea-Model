@@ -11,12 +11,16 @@ from rim.storage.repo import RunRepository
 
 class DummyProviderSession:
     async def invoke_json(self, stage: str, prompt: str, json_schema=None):  # noqa: ANN001, ANN201
-        if stage not in {"critic_arbitration", "critic_arbitration_devil"}:
+        if stage not in {
+            "critic_arbitration",
+            "critic_arbitration_devil",
+            "critic_arbitration_specialist",
+        }:
             raise AssertionError("unexpected stage")
         if stage == "critic_arbitration_devil":
             return (
                 {
-                    "node_id": "n1",
+                    "node_id": "",
                     "resolved_issue": "Merge disagreement into one prioritized blocker.",
                     "rationale": "Devil pass confirms overlap between concerns.",
                     "action": "merge",
@@ -24,9 +28,20 @@ class DummyProviderSession:
                 },
                 "claude",
             )
+        if stage == "critic_arbitration_specialist":
+            return (
+                {
+                    "node_id": "",
+                    "resolved_issue": "Specialist review confirms rollout blocker",
+                    "rationale": "Specialist loop adds stronger domain-aware arbitration.",
+                    "action": "merge",
+                    "confidence": 0.94,
+                },
+                "codex",
+            )
         return (
             {
-                "node_id": "n1",
+                "node_id": "",
                 "resolved_issue": "Merge disagreements into one prioritized risk.",
                 "rationale": "Concerns overlap and should be addressed together.",
                 "action": "merge",
@@ -428,6 +443,86 @@ def test_orchestrator_runs_devils_advocate_arbitration_round(
     assert arbitration_logs[0].meta["devils_advocate_enabled"] is True
     assert arbitration_logs[0].meta["devils_advocate_rounds"] == 1
     assert arbitration_logs[0].meta["devils_advocate_count"] >= 1
+
+
+def test_orchestrator_runs_specialist_arbitration_loop_on_diversity_flags(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    async def fake_decompose(*args, **kwargs):  # noqa: ANN001, ANN202
+        root = DecompositionNode(
+            depth=0,
+            component_text="Idea D3",
+            node_type="claim",
+            confidence=0.4,
+        )
+        return [root], "codex", {"stop_reason": "max_depth"}
+
+    async def fake_critics(*args, **kwargs):  # noqa: ANN001, ANN202
+        nodes = kwargs.get("nodes") or args[1]
+        return [
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="logic",
+                issue="No rollout criteria",
+                severity="high",
+                confidence=0.8,
+                suggested_fix="Define criteria",
+                provider="codex",
+            ),
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="execution",
+                issue="Unclear deployment gating",
+                severity="high",
+                confidence=0.7,
+                suggested_fix="Add gates",
+                provider="claude",
+            ),
+        ]
+
+    async def fake_synthesize(*args, **kwargs):  # noqa: ANN001, ANN202
+        return (
+            {
+                "synthesized_idea": "Idea D3 refined",
+                "changes_summary": ["Added rollout gating rules."],
+                "residual_risks": [],
+                "next_experiments": ["Test rollout gates on staging."],
+                "confidence_score": 0.82,
+            },
+            ["claude"],
+        )
+
+    monkeypatch.setattr(orchestrator_module, "decompose_idea", fake_decompose)
+    monkeypatch.setattr(orchestrator_module, "run_critics", fake_critics)
+    monkeypatch.setattr(orchestrator_module, "synthesize_idea", fake_synthesize)
+    monkeypatch.setenv("RIM_MAX_ANALYSIS_CYCLES", "1")
+    monkeypatch.setenv("RIM_ENABLE_DISAGREEMENT_ARBITRATION", "1")
+    monkeypatch.setenv("RIM_ARBITRATION_MAX_JOBS", "2")
+    monkeypatch.setenv("RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION", "0")
+    monkeypatch.setenv("RIM_RECONCILE_MIN_UNIQUE_CRITICS", "3")
+    monkeypatch.setenv("RIM_RECONCILE_MAX_SINGLE_CRITIC_SHARE", "0.7")
+    monkeypatch.setenv("RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP", "1")
+    monkeypatch.setenv("RIM_SPECIALIST_ARBITRATION_MAX_JOBS", "2")
+    monkeypatch.setenv("RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE", "0.95")
+
+    repo = RunRepository(db_path=tmp_path / "rim_orchestrator_specialist_arbitration.db")
+    orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
+    request = AnalyzeRequest(idea="Idea D3", mode="deep")
+    run_id = orchestrator.create_run(request, status="running")
+
+    result = asyncio.run(orchestrator.execute_run(run_id, request))
+    assert result.synthesized_idea == "Idea D3 refined"
+
+    arbitration_logs = [
+        log
+        for log in orchestrator.get_run_logs(run_id).logs
+        if log.stage == "challenge_arbitration"
+    ]
+    assert len(arbitration_logs) == 1
+    assert arbitration_logs[0].status == "completed"
+    assert arbitration_logs[0].meta["specialist_loop_enabled"] is True
+    assert arbitration_logs[0].meta["specialist_count"] >= 1
 
 
 def test_orchestrator_runs_executable_verification(

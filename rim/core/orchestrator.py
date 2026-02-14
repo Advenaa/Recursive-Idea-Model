@@ -421,6 +421,22 @@ class RimOrchestrator:
                 lower=0.0,
                 upper=1.0,
             )
+            enable_specialist_arbitration_loop = _parse_bool_env(
+                "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP",
+                request.mode == "deep",
+            )
+            specialist_arbitration_max_jobs = _parse_int_env(
+                "RIM_SPECIALIST_ARBITRATION_MAX_JOBS",
+                2,
+                lower=0,
+                upper=6,
+            )
+            specialist_arbitration_min_confidence = _parse_float_env(
+                "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE",
+                0.78,
+                lower=0.0,
+                upper=1.0,
+            )
             self.repository.mark_run_status(run_id=run_id, status="running")
             self.repository.log_stage(
                 run_id=run_id,
@@ -549,12 +565,22 @@ class RimOrchestrator:
                                 else 0
                             ),
                             devils_advocate_min_confidence=devils_advocate_min_confidence,
+                            specialist_loop_enabled=enable_specialist_arbitration_loop,
+                            specialist_max_jobs=specialist_arbitration_max_jobs,
+                            specialist_min_confidence=specialist_arbitration_min_confidence,
                         )
                         devils_advocate_count = len(
                             [
                                 item
                                 for item in arbitrations
                                 if str(item.get("round", "")).startswith("devil_")
+                            ]
+                        )
+                        specialist_count = len(
+                            [
+                                item
+                                for item in arbitrations
+                                if str(item.get("round", "")) == "specialist"
                             ]
                         )
                         self.repository.log_stage(
@@ -578,6 +604,10 @@ class RimOrchestrator:
                                 ),
                                 "devils_advocate_min_confidence": devils_advocate_min_confidence,
                                 "devils_advocate_count": devils_advocate_count,
+                                "specialist_loop_enabled": enable_specialist_arbitration_loop,
+                                "specialist_max_jobs": specialist_arbitration_max_jobs,
+                                "specialist_min_confidence": specialist_arbitration_min_confidence,
+                                "specialist_count": specialist_count,
                             },
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -595,6 +625,9 @@ class RimOrchestrator:
                                     else 0
                                 ),
                                 "devils_advocate_min_confidence": devils_advocate_min_confidence,
+                                "specialist_loop_enabled": enable_specialist_arbitration_loop,
+                                "specialist_max_jobs": specialist_arbitration_max_jobs,
+                                "specialist_min_confidence": specialist_arbitration_min_confidence,
                                 "error": _error_from_exception(exc, default_stage="challenge_arbitration"),
                             },
                         )

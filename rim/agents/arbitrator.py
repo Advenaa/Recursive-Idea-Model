@@ -53,6 +53,29 @@ Relevant findings:
 {findings}
 """
 
+SPECIALIST_ARBITRATION_PROMPT = """You are a specialist arbitration reviewer.
+Return STRICT JSON only with:
+{{
+  "node_id": "string",
+  "resolved_issue": "string",
+  "rationale": "string",
+  "action": "escalate|merge|drop",
+  "confidence": 0.0
+}}
+
+Node diversity flag:
+{flag}
+
+Target disagreement:
+{disagreement}
+
+Latest arbitration decision:
+{prior_decision}
+
+Relevant findings:
+{findings}
+"""
+
 
 def _normalize_arbitration(payload: dict[str, Any], default_node_id: str) -> dict[str, Any]:
     action = str(payload.get("action", "merge")).strip().lower()
@@ -80,6 +103,14 @@ def _needs_devils_advocate_pass(decision: dict[str, Any], min_confidence: float)
     return action == "escalate"
 
 
+def _needs_specialist_pass(decision: dict[str, Any], min_confidence: float) -> bool:
+    confidence = float(decision.get("confidence", 0.0))
+    action = str(decision.get("action", "merge")).strip().lower()
+    if confidence < min_confidence:
+        return True
+    return action == "escalate"
+
+
 async def run_arbitration(
     router: Any,
     *,
@@ -88,6 +119,9 @@ async def run_arbitration(
     max_jobs: int = 2,
     devils_advocate_rounds: int = 0,
     devils_advocate_min_confidence: float = 0.72,
+    specialist_loop_enabled: bool = False,
+    specialist_max_jobs: int = 2,
+    specialist_min_confidence: float = 0.78,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     disagreements = list(reconciliation.get("disagreements") or [])[: max(0, int(max_jobs))]
     if not disagreements:
@@ -192,6 +226,69 @@ async def run_arbitration(
                     "action": "escalate",
                     "confidence": min(0.3, float(prior.get("confidence") or 0.3)),
                     "round": f"devil_{round_index}",
+                }
+                output.append(fallback)
+                latest_by_node[node_id] = fallback
+
+    if specialist_loop_enabled:
+        guardrails = reconciliation.get("diversity_guardrails", {})
+        flagged_nodes = list(guardrails.get("flagged_nodes") or [])
+        normalized_specialist_max_jobs = max(0, int(specialist_max_jobs))
+        normalized_specialist_conf = max(0.0, min(1.0, float(specialist_min_confidence)))
+        jobs: list[tuple[str, dict[str, Any]]] = []
+        for item in flagged_nodes:
+            if not isinstance(item, dict):
+                continue
+            node_id = str(item.get("node_id") or "").strip()
+            if not node_id:
+                continue
+            latest = latest_by_node.get(node_id)
+            if latest is None:
+                continue
+            if not _needs_specialist_pass(latest, normalized_specialist_conf):
+                continue
+            jobs.append((node_id, item))
+            if len(jobs) >= normalized_specialist_max_jobs:
+                break
+
+        for node_id, flag in jobs:
+            disagreement = disagreement_by_node.get(node_id, {"node_id": node_id})
+            prior = latest_by_node.get(node_id, {"node_id": node_id})
+            scoped_findings = [
+                {
+                    "critic_type": item.critic_type,
+                    "severity": item.severity,
+                    "issue": item.issue,
+                    "suggested_fix": item.suggested_fix,
+                }
+                for item in findings
+                if item.node_id == node_id
+            ][:8]
+            prompt = SPECIALIST_ARBITRATION_PROMPT.format(
+                flag=flag,
+                disagreement=disagreement,
+                prior_decision=prior,
+                findings=scoped_findings,
+            )
+            try:
+                payload, provider = await router.invoke_json(
+                    "critic_arbitration_specialist",
+                    prompt,
+                    json_schema=ARBITRATION_SCHEMA,
+                )
+                normalized = _normalize_arbitration(payload, node_id)
+                normalized["round"] = "specialist"
+                output.append(normalized)
+                latest_by_node[node_id] = normalized
+                providers.append(provider)
+            except Exception:  # noqa: BLE001
+                fallback = {
+                    "node_id": node_id,
+                    "resolved_issue": str(prior.get("resolved_issue") or "Escalate disagreement"),
+                    "rationale": "Specialist arbitration failed; preserving unresolved risk.",
+                    "action": "escalate",
+                    "confidence": min(0.3, float(prior.get("confidence") or 0.3)),
+                    "round": "specialist",
                 }
                 output.append(fallback)
                 latest_by_node[node_id] = fallback

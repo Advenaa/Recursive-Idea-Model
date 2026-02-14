@@ -50,6 +50,17 @@ class MultiRoundRouter:
                 },
                 "claude",
             )
+        if stage == "critic_arbitration_specialist":
+            return (
+                {
+                    "node_id": "n1",
+                    "resolved_issue": "Specialist review confirms concrete rollout blocker",
+                    "rationale": "Specialist loop adds stronger role diversity judgment.",
+                    "action": "merge",
+                    "confidence": 0.9,
+                },
+                "codex",
+            )
         raise AssertionError("unexpected stage")
 
 
@@ -146,3 +157,62 @@ def test_run_arbitration_runs_devils_advocate_round() -> None:
     assert arbitrations[1]["round"] == "devil_1"
     assert arbitrations[1]["action"] == "merge"
     assert providers == ["codex", "claude"]
+
+
+def test_run_arbitration_runs_specialist_round_for_flagged_nodes() -> None:
+    findings = [
+        CriticFinding(
+            node_id="n1",
+            critic_type="logic",
+            issue="No rollout criteria",
+            severity="high",
+            confidence=0.8,
+            suggested_fix="Define criteria",
+            provider="codex",
+        ),
+        CriticFinding(
+            node_id="n1",
+            critic_type="execution",
+            issue="Unclear deployment gating",
+            severity="high",
+            confidence=0.7,
+            suggested_fix="Add gates",
+            provider="claude",
+        ),
+    ]
+    reconciliation = {
+        "disagreements": [
+            {
+                "node_id": "n1",
+                "issue_count": 2,
+                "issues": ["No rollout criteria", "Unclear deployment gating"],
+                "critic_types": ["logic", "execution"],
+            }
+        ],
+        "diversity_guardrails": {
+            "flagged_nodes": [
+                {
+                    "node_id": "n1",
+                    "unique_critics": 2,
+                    "total_findings": 2,
+                    "dominant_critic": "logic",
+                    "dominant_share": 0.5,
+                }
+            ]
+        },
+    }
+    router = MultiRoundRouter()
+    arbitrations, providers = asyncio.run(
+        run_arbitration(
+            router,
+            reconciliation=reconciliation,
+            findings=findings,
+            max_jobs=2,
+            specialist_loop_enabled=True,
+            specialist_max_jobs=2,
+            specialist_min_confidence=0.95,
+        )
+    )
+    assert "critic_arbitration_specialist" in router.calls
+    assert any(item.get("round") == "specialist" for item in arbitrations)
+    assert providers[-1] in {"codex", "claude"}
