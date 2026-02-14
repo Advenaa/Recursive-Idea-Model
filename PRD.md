@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + advanced verification increments): `87` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + externalized verification increments): `92` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist

@@ -180,9 +180,9 @@ export RIM_ADV_VERIFY_SIMULATION_SEED=42
 export RIM_ADV_VERIFY_DATA_PATH=rim/eval/data/benchmark_ideas.jsonl
 export RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC=8
 # Optional external adapters (stdin JSON in, stdout JSON out)
-export RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD=""
-export RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD=""
-export RIM_ADV_VERIFY_EXTERNAL_DATA_CMD=""
+export RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD="python scripts/advanced_verify_adapter.py"
+export RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD="python scripts/advanced_verify_adapter.py"
+export RIM_ADV_VERIFY_EXTERNAL_DATA_CMD="python scripts/advanced_verify_adapter.py"
 ```
 
 Verification constraint formats:

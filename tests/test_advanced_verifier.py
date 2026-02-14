@@ -124,3 +124,42 @@ def test_advanced_verifier_can_use_external_solver_adapter(tmp_path: Path) -> No
     assert payload["summary"]["total_checks"] == 1
     assert payload["summary"]["failed_checks"] == 0
     assert payload["checks"][0]["adapter"] == "external"
+
+
+def test_advanced_verifier_can_use_repo_adapter_for_multiple_check_types(tmp_path: Path) -> None:
+    adapter = Path(__file__).resolve().parents[1] / "scripts" / "advanced_verify_adapter.py"
+    reference = tmp_path / "reference.jsonl"
+    reference.write_text(
+        "\n".join(
+            [
+                '{"idea":"include compliance audit controls"}',
+                '{"idea":"run staged pilot"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cmd = f"{sys.executable} {adapter}"
+    synthesis = {
+        "synthesized_idea": "include compliance audit controls",
+        "changes_summary": [],
+        "residual_risks": [],
+        "next_experiments": ["run staged pilot"],
+        "confidence_score": 0.8,
+    }
+    payload = run_advanced_verification(
+        constraints=[
+            "solver: confidence_score >= 0.75",
+            "simulate: confidence_score >= 0.6 | trials=60 | min_pass_rate=0.7",
+            f"data: compliance,audit|path={reference}|min_overlap=0.5",
+        ],
+        synthesis=synthesis,
+        findings=[],
+        max_checks=5,
+        external_solver_cmd=cmd,
+        external_simulation_cmd=cmd,
+        external_data_cmd=cmd,
+        external_timeout_sec=5,
+    )
+    assert payload["summary"]["total_checks"] == 3
+    assert payload["summary"]["failed_checks"] == 0
+    assert all(item.get("adapter") == "external" for item in payload["checks"])
