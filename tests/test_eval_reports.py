@@ -5,11 +5,13 @@ import asyncio
 from rim.core.schemas import AnalyzeResult, DecompositionNode
 from rim.eval import runner
 from rim.eval.runner import (
+    build_blind_review_packet,
     compare_reports,
     evaluate_regression_gate,
     run_benchmark,
     run_duel_benchmark,
     run_single_pass_baseline,
+    save_blind_review_packet,
     save_report,
 )
 
@@ -262,4 +264,52 @@ def test_save_report_auto_paths_are_unique(tmp_path) -> None:  # noqa: ANN001
     finally:
         runner.DEFAULT_REPORTS_DIR = original_reports_dir
 
+    assert path_a != path_b
+
+
+def test_build_blind_review_packet_anonymizes_completed_runs() -> None:
+    report = {
+        "created_at": "2026-02-14T00:00:00Z",
+        "dataset_path": "x.jsonl",
+        "runs": [
+            {
+                "id": "x1",
+                "idea": "Idea A",
+                "domain": "finance",
+                "run_id": "run-1",
+                "mode": "deep",
+                "status": "completed",
+                "quality": {"quality_score": 0.5},
+                "synthesized_idea": "Better Idea A",
+                "changes_summary": ["c1"],
+                "residual_risks": ["r1"],
+                "next_experiments": ["e1"],
+            },
+            {
+                "id": "x2",
+                "idea": "Idea B",
+                "status": "failed",
+            },
+        ],
+    }
+    packet = build_blind_review_packet(report)
+    assert packet["item_count"] == 1
+    item = packet["items"][0]
+    assert item["blind_id"] == "candidate-001"
+    assert item["idea"] == "Idea A"
+    assert item["synthesized_idea"] == "Better Idea A"
+    assert "run_id" not in item
+    assert "quality" not in item
+    assert "mode" not in item
+
+
+def test_save_blind_review_packet_auto_paths_are_unique(tmp_path) -> None:  # noqa: ANN001
+    packet = {"items": []}
+    original_reports_dir = runner.DEFAULT_REPORTS_DIR
+    runner.DEFAULT_REPORTS_DIR = tmp_path
+    try:
+        path_a = save_blind_review_packet(packet)
+        path_b = save_blind_review_packet(packet)
+    finally:
+        runner.DEFAULT_REPORTS_DIR = original_reports_dir
     assert path_a != path_b

@@ -211,6 +211,10 @@ async def run_benchmark(
                     "run_id": result.run_id,
                     "status": "completed",
                     "quality": score,
+                    "synthesized_idea": result.synthesized_idea,
+                    "changes_summary": list(result.changes_summary),
+                    "residual_risks": list(result.residual_risks),
+                    "next_experiments": list(result.next_experiments),
                 }
             )
         except Exception as exc:  # noqa: BLE001
@@ -270,6 +274,10 @@ def run_single_pass_baseline(
                 "run_id": result.run_id,
                 "status": "completed",
                 "quality": score,
+                "synthesized_idea": result.synthesized_idea,
+                "changes_summary": list(result.changes_summary),
+                "residual_risks": list(result.residual_risks),
+                "next_experiments": list(result.next_experiments),
             }
         )
 
@@ -327,6 +335,64 @@ def save_report(report: dict[str, Any], output_path: Path | None = None) -> Path
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     auto_path = DEFAULT_REPORTS_DIR / f"benchmark_{stamp}.json"
     auto_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return auto_path
+
+
+def build_blind_review_packet(
+    report: dict[str, Any],
+    *,
+    max_items: int | None = None,
+) -> dict[str, Any]:
+    runs = report.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    completed = [
+        item
+        for item in runs
+        if isinstance(item, dict) and str(item.get("status") or "").strip().lower() == "completed"
+    ]
+    if max_items is not None and max_items > 0:
+        completed = completed[:max_items]
+
+    items: list[dict[str, Any]] = []
+    for index, item in enumerate(completed, start=1):
+        items.append(
+            {
+                "blind_id": f"candidate-{index:03d}",
+                "idea": str(item.get("idea") or ""),
+                "domain": item.get("domain"),
+                "synthesized_idea": str(item.get("synthesized_idea") or ""),
+                "changes_summary": list(item.get("changes_summary") or []),
+                "residual_risks": list(item.get("residual_risks") or []),
+                "next_experiments": list(item.get("next_experiments") or []),
+            }
+        )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source_report_created_at": report.get("created_at"),
+        "source_dataset_path": report.get("dataset_path"),
+        "item_count": len(items),
+        "rubric": {
+            "dimensions": ["rigor", "novelty", "practicality", "overall"],
+            "scale": "1-5",
+            "instructions": (
+                "Score each candidate independently. Do not infer provider/mode metadata."
+            ),
+        },
+        "items": items,
+    }
+
+
+def save_blind_review_packet(packet: dict[str, Any], output_path: Path | None = None) -> Path:
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(packet, indent=2), encoding="utf-8")
+        return output_path
+
+    DEFAULT_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    auto_path = DEFAULT_REPORTS_DIR / f"blind_review_{stamp}.json"
+    auto_path.write_text(json.dumps(packet, indent=2), encoding="utf-8")
     return auto_path
 
 

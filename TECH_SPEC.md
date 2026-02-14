@@ -383,6 +383,7 @@ Additional eval commands:
 3. `rim eval baseline --limit 10 --save baseline.json` for deterministic single-pass baseline outputs.
 4. `rim eval gate --base <report_a> --target <report_b> --min-quality-delta 0.0 --max-runtime-delta-sec 15` for pass/fail regression checks.
 5. `rim eval duel --mode deep --limit 10 --min-quality-delta 0.0` to run baseline + RIM benchmark and gate in one step.
+6. `rim eval blindpack --report <report.json> --limit 20 --save blind_review.json` to generate anonymized review packets.
 
 ## 9) Orchestration Logic
 

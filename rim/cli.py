@@ -11,6 +11,7 @@ from rim.core.schemas import AnalyzeRequest
 from rim.eval.runner import (
     DEFAULT_DATASET_PATH,
     DEFAULT_REPORTS_DIR,
+    build_blind_review_packet,
     compare_reports,
     evaluate_regression_gate,
     list_reports,
@@ -18,6 +19,7 @@ from rim.eval.runner import (
     run_benchmark,
     run_duel_benchmark,
     run_single_pass_baseline,
+    save_blind_review_packet,
     save_report,
 )
 from rim.providers.router import ProviderRouter
@@ -292,6 +294,35 @@ def _cmd_eval_gate(args: argparse.Namespace) -> int:
     return 0 if gate["passed"] else 2
 
 
+def _resolve_blindpack_report_path(args: argparse.Namespace) -> Path:
+    if args.report:
+        return Path(args.report)
+    reports = list_reports(DEFAULT_REPORTS_DIR)
+    if not reports:
+        raise ValueError("No saved reports available for blind review packet generation.")
+    return reports[-1]
+
+
+def _cmd_eval_blindpack(args: argparse.Namespace) -> int:
+    report_path = _resolve_blindpack_report_path(args)
+    report = load_report(report_path)
+    packet = build_blind_review_packet(
+        report=report,
+        max_items=args.limit,
+    )
+    save_path = save_blind_review_packet(
+        packet,
+        Path(args.save) if args.save else None,
+    )
+    payload = {
+        "source_report": str(report_path),
+        "blind_review_path": str(save_path),
+        "item_count": packet["item_count"],
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rim")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -372,6 +403,13 @@ def build_parser() -> argparse.ArgumentParser:
     eval_gate.add_argument("--min-quality-delta", type=float, default=0.0)
     eval_gate.add_argument("--max-runtime-delta-sec", type=float)
     eval_gate.add_argument("--min-shared-runs", type=int, default=1)
+    eval_blindpack = eval_sub.add_parser(
+        "blindpack",
+        help="Generate anonymized blind-review packet from a benchmark report",
+    )
+    eval_blindpack.add_argument("--report")
+    eval_blindpack.add_argument("--limit", type=int)
+    eval_blindpack.add_argument("--save")
 
     sub.add_parser("health", help="Healthcheck DB and providers")
     return parser
@@ -406,6 +444,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_compare(args))
     if args.command == "eval" and args.eval_command == "gate":
         raise SystemExit(_cmd_eval_gate(args))
+    if args.command == "eval" and args.eval_command == "blindpack":
+        raise SystemExit(_cmd_eval_blindpack(args))
     if args.command == "health":
         raise SystemExit(asyncio.run(_cmd_health()))
     raise SystemExit(1)

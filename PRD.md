@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 run-controls increment): `70` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 run-controls + eval increments): `77` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -253,7 +253,7 @@ Each run must return JSON with this minimum schema:
 ## 19) Post-MVP Roadmap (v0.2)
 
 - Replace heuristic scoring with a stronger domain-weighted rubric (done on February 14, 2026)
-- Finalize a canonical 20-idea benchmark pack and blind-review process (dataset complete on February 14, 2026; blind-review process pending)
+- Finalize a canonical 20-idea benchmark pack and blind-review process (done on February 14, 2026; `rim eval blindpack`)
 - Add explicit run cancel/retry controls in API and CLI (done on February 14, 2026)
 - Add richer evaluation analytics (domain-level trend and regression deltas added on February 14, 2026)
 
@@ -272,6 +272,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Persistent run artifacts, memory retrieval filters, and feedback-driven memory rescoring.
 - Explicit run controls: cancel/retry in API (`/runs/{id}/cancel`, `/runs/{id}/retry`) and CLI (`rim run cancel`, `rim run retry`).
 - Domain-weighted quality rubric and domain-level benchmark analytics (`domain_metrics`, `domain_deltas`).
+- Blind-review workflow for evaluator packets (`rim eval blindpack` + anonymized packet output).
 - Provider orchestration guardrails (fallbacks, retries, determinism controls, and run budgets).
 - Benchmark/eval workflow with baseline, compare, and gate.
 

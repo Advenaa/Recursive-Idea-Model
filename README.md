@@ -37,6 +37,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - SQLite persistence + memory context reuse (`rim/storage/`)
 - Benchmark runner + canonical 20-idea dataset (`rim/eval/`)
 - Domain-weighted benchmark scoring + domain trend deltas (`rim/eval/runner.py`)
+- Blind-review packet generator for report evaluation (`rim eval blindpack`)
 - Deterministic single-pass baseline + regression gate (`rim eval baseline`, `rim eval gate`)
 - Local CLI entrypoint (`rim/cli.py`)
 
@@ -115,6 +116,7 @@ rim eval duel --mode deep --limit 3 --min-quality-delta 0.0
 rim eval list
 rim eval compare
 rim eval gate --min-quality-delta 0.0 --max-runtime-delta-sec 15
+rim eval blindpack --limit 20
 ```
 
 Provider env vars:
