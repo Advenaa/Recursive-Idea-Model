@@ -46,7 +46,7 @@ def test_recursive_decomposition_with_confidence_stop() -> None:
         max_children_per_node=4,
         runtime_budget_sec=60,
     )
-    nodes, provider = asyncio.run(
+    nodes, provider, meta = asyncio.run(
         decompose_idea(
             router=FakeRouter(),
             idea="Root idea",
@@ -60,3 +60,4 @@ def test_recursive_decomposition_with_confidence_stop() -> None:
     texts = [node.component_text for node in nodes]
     assert texts == ["Root idea", "A", "B", "A1"]
     assert provider in {"codex", "claude"}
+    assert meta["stop_reason"] in {"marginal_gain", "max_depth", "exhausted"}

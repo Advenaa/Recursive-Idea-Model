@@ -154,7 +154,7 @@ async def decompose_idea(
     domain: str | None = None,
     constraints: list[str] | None = None,
     memory_context: list[str] | None = None,
-) -> tuple[list[DecompositionNode], str]:
+) -> tuple[list[DecompositionNode], str, dict[str, Any]]:
     constraints = constraints or []
     root = DecompositionNode(
         id=str(uuid4()),
@@ -171,13 +171,18 @@ async def decompose_idea(
     seen_components = {root.component_text.strip().lower()}
     low_gain_levels = 0
     started = time.monotonic()
+    levels_executed = 0
+    stop_reason = "exhausted"
 
     for _depth in range(settings.max_depth):
         if not current_level:
+            stop_reason = "exhausted"
             break
         if time.monotonic() - started > settings.runtime_budget_sec:
+            stop_reason = "runtime_budget"
             break
 
+        levels_executed += 1
         next_level: list[DecompositionNode] = []
         level_new_nodes = 0
         for parent in current_level:
@@ -207,8 +212,16 @@ async def decompose_idea(
         else:
             low_gain_levels = 0
         if low_gain_levels >= settings.marginal_gain_patience:
+            stop_reason = "marginal_gain"
             break
+        stop_reason = "max_depth"
         current_level = next_level
 
     provider = provider_order[-1] if provider_order else "none"
-    return all_nodes, provider
+    meta = {
+        "stop_reason": stop_reason,
+        "levels_executed": levels_executed,
+        "runtime_sec": round(time.monotonic() - started, 3),
+        "unique_components": len(seen_components),
+    }
+    return all_nodes, provider, meta

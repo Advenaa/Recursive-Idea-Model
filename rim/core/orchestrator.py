@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from uuid import uuid4
 
 from rim.agents.critics import run_critics
@@ -72,7 +73,8 @@ class RimOrchestrator:
                 status="completed",
                 meta={"entries": len(memory_context)},
             )
-            nodes, decompose_provider = await decompose_idea(
+            decompose_started = time.perf_counter()
+            nodes, decompose_provider, decompose_meta = await decompose_idea(
                 self.router,
                 request.idea,
                 settings,
@@ -85,19 +87,23 @@ class RimOrchestrator:
                 stage="decompose",
                 status="completed",
                 provider=decompose_provider,
-                meta={"node_count": len(nodes), "stop_max_depth": settings.max_depth},
+                latency_ms=int((time.perf_counter() - decompose_started) * 1000),
+                meta={"node_count": len(nodes), **decompose_meta},
             )
             self.repository.save_nodes(run_id, nodes)
 
+            challenge_started = time.perf_counter()
             findings = await run_critics(self.router, nodes, settings)
             self.repository.log_stage(
                 run_id=run_id,
                 stage="challenge_parallel",
                 status="completed",
+                latency_ms=int((time.perf_counter() - challenge_started) * 1000),
                 meta={"finding_count": len(findings)},
             )
             self.repository.save_findings(run_id, findings)
 
+            synth_started = time.perf_counter()
             synthesis, synthesis_providers = await synthesize_idea(
                 self.router,
                 request.idea,
@@ -111,6 +117,7 @@ class RimOrchestrator:
                 stage="synthesis",
                 status="completed",
                 provider=",".join(synthesis_providers),
+                latency_ms=int((time.perf_counter() - synth_started) * 1000),
             )
             self.repository.save_synthesis(
                 run_id=run_id,
@@ -124,11 +131,13 @@ class RimOrchestrator:
                 changes_summary=synthesis["changes_summary"],
                 residual_risks=synthesis["residual_risks"],
             )
+            memory_write_started = time.perf_counter()
             self.repository.save_memory_entries(run_id, memory_entries)
             self.repository.log_stage(
                 run_id=run_id,
                 stage="memory_write",
                 status="completed",
+                latency_ms=int((time.perf_counter() - memory_write_started) * 1000),
                 meta={"entries": len(memory_entries)},
             )
 
