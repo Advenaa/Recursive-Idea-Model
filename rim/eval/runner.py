@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from rim.core.orchestrator import RimOrchestrator
-from rim.core.schemas import AnalyzeRequest, AnalyzeResult
+from rim.core.schemas import AnalyzeRequest, AnalyzeResult, DecompositionNode
 from rim.eval.benchmark import evaluate_run
 
 DEFAULT_DATASET_PATH = Path("rim/eval/data/benchmark_ideas.jsonl")
@@ -36,6 +36,61 @@ def heuristic_reviewer(result: AnalyzeResult) -> tuple[float, float, float]:
     novelty = min(1.0, 0.2 + (0.08 * min(change_count, 8)))
     practicality = min(1.0, 0.2 + (0.12 * min(experiment_count, 6)))
     return rigor, novelty, practicality
+
+
+def _summarize_report(
+    started_at: str,
+    dataset_path: Path,
+    mode: str,
+    total_runtime_sec: float,
+    runs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not runs:
+        return {
+            "created_at": started_at,
+            "dataset_size": 0,
+            "mode": mode,
+            "dataset_path": str(dataset_path),
+            "total_runtime_sec": total_runtime_sec,
+            "average_runtime_sec": 0.0,
+            "average_quality_score": 0.0,
+            "runs": [],
+        }
+
+    avg_runtime = sum(item["runtime_sec"] for item in runs) / len(runs)
+    avg_quality = sum(item["quality"]["quality_score"] for item in runs) / len(runs)
+    return {
+        "created_at": started_at,
+        "dataset_size": len(runs),
+        "mode": mode,
+        "dataset_path": str(dataset_path),
+        "total_runtime_sec": total_runtime_sec,
+        "average_runtime_sec": round(avg_runtime, 3),
+        "average_quality_score": round(avg_quality, 3),
+        "runs": runs,
+    }
+
+
+def _single_pass_baseline_result(idea: str, run_id: str) -> AnalyzeResult:
+    return AnalyzeResult(
+        run_id=run_id,
+        mode="fast",
+        input_idea=idea,
+        decomposition=[
+            DecompositionNode(
+                depth=0,
+                component_text=idea.strip(),
+                node_type="claim",
+                confidence=0.95,
+            )
+        ],
+        critic_findings=[],
+        synthesized_idea=idea.strip(),
+        changes_summary=[],
+        residual_risks=[],
+        next_experiments=[],
+        confidence_score=0.45,
+    )
 
 
 async def run_benchmark(
@@ -77,30 +132,55 @@ async def run_benchmark(
         )
 
     total_runtime_sec = round(time.perf_counter() - started, 3)
-    if not runs:
-        return {
-            "created_at": started_at,
-            "dataset_size": 0,
-            "mode": mode,
-            "dataset_path": str(dataset_path),
-            "total_runtime_sec": total_runtime_sec,
-            "average_runtime_sec": 0.0,
-            "average_quality_score": 0.0,
-            "runs": [],
-        }
+    return _summarize_report(
+        started_at=started_at,
+        dataset_path=dataset_path,
+        mode=mode,
+        total_runtime_sec=total_runtime_sec,
+        runs=runs,
+    )
 
-    avg_runtime = sum(item["runtime_sec"] for item in runs) / len(runs)
-    avg_quality = sum(item["quality"]["quality_score"] for item in runs) / len(runs)
-    return {
-        "created_at": started_at,
-        "dataset_size": len(runs),
-        "mode": mode,
-        "dataset_path": str(dataset_path),
-        "total_runtime_sec": total_runtime_sec,
-        "average_runtime_sec": round(avg_runtime, 3),
-        "average_quality_score": round(avg_quality, 3),
-        "runs": runs,
-    }
+
+def run_single_pass_baseline(
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    started_at = datetime.now(timezone.utc).isoformat()
+    dataset = load_dataset(dataset_path)
+    if limit is not None and limit > 0:
+        dataset = dataset[:limit]
+
+    runs: list[dict[str, Any]] = []
+    started = time.perf_counter()
+
+    for item in dataset:
+        item_id = str(item.get("id") or f"row-{len(runs) + 1}")
+        run_started = time.perf_counter()
+        result = _single_pass_baseline_result(
+            idea=str(item["idea"]),
+            run_id=f"baseline-{item_id}",
+        )
+        runtime_sec = round(time.perf_counter() - run_started, 3)
+        score = evaluate_run(result, heuristic_reviewer)
+        runs.append(
+            {
+                "id": item.get("id"),
+                "idea": result.input_idea,
+                "mode": "single_pass_baseline",
+                "runtime_sec": runtime_sec,
+                "run_id": result.run_id,
+                "quality": score,
+            }
+        )
+
+    total_runtime_sec = round(time.perf_counter() - started, 3)
+    return _summarize_report(
+        started_at=started_at,
+        dataset_path=dataset_path,
+        mode="single_pass_baseline",
+        total_runtime_sec=total_runtime_sec,
+        runs=runs,
+    )
 
 
 def save_report(report: dict[str, Any], output_path: Path | None = None) -> Path:
@@ -174,4 +254,59 @@ def compare_reports(base: dict[str, Any], target: dict[str, Any]) -> dict[str, A
         "average_runtime_delta_sec": round(target_runtime - base_runtime, 4),
         "shared_run_count": len(shared_ids),
         "run_deltas": run_deltas,
+    }
+
+
+def evaluate_regression_gate(
+    comparison: dict[str, Any],
+    min_quality_delta: float = 0.0,
+    max_runtime_delta_sec: float | None = None,
+    min_shared_runs: int = 1,
+) -> dict[str, Any]:
+    quality_delta = float(comparison.get("average_quality_delta", 0.0))
+    runtime_delta = float(comparison.get("average_runtime_delta_sec", 0.0))
+    shared_runs = int(comparison.get("shared_run_count", 0))
+
+    checks: list[dict[str, Any]] = [
+        {
+            "name": "shared_runs",
+            "passed": shared_runs >= min_shared_runs,
+            "observed": shared_runs,
+            "threshold": min_shared_runs,
+            "direction": ">=",
+        },
+        {
+            "name": "quality_delta",
+            "passed": quality_delta >= min_quality_delta,
+            "observed": quality_delta,
+            "threshold": min_quality_delta,
+            "direction": ">=",
+        },
+    ]
+
+    if max_runtime_delta_sec is not None:
+        checks.append(
+            {
+                "name": "runtime_delta_sec",
+                "passed": runtime_delta <= max_runtime_delta_sec,
+                "observed": runtime_delta,
+                "threshold": max_runtime_delta_sec,
+                "direction": "<=",
+            }
+        )
+
+    passed = all(item["passed"] for item in checks)
+    return {
+        "passed": passed,
+        "checks": checks,
+        "observed": {
+            "average_quality_delta": quality_delta,
+            "average_runtime_delta_sec": runtime_delta,
+            "shared_run_count": shared_runs,
+        },
+        "thresholds": {
+            "min_quality_delta": min_quality_delta,
+            "max_runtime_delta_sec": max_runtime_delta_sec,
+            "min_shared_runs": min_shared_runs,
+        },
     }

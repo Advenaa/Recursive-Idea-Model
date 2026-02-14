@@ -316,6 +316,8 @@ Additional eval commands:
 
 1. `rim eval list` for saved report history.
 2. `rim eval compare --base <report_a> --target <report_b>` for time-over-time deltas (defaults to latest two reports when omitted).
+3. `rim eval baseline --limit 10 --save baseline.json` for deterministic single-pass baseline outputs.
+4. `rim eval gate --base <report_a> --target <report_b> --min-quality-delta 0.0 --max-runtime-delta-sec 15` for pass/fail regression checks.
 
 ## 9) Orchestration Logic
 

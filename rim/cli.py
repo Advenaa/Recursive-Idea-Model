@@ -11,9 +11,11 @@ from rim.eval.runner import (
     DEFAULT_DATASET_PATH,
     DEFAULT_REPORTS_DIR,
     compare_reports,
+    evaluate_regression_gate,
     list_reports,
     load_report,
     run_benchmark,
+    run_single_pass_baseline,
     save_report,
 )
 from rim.providers.router import ProviderRouter
@@ -119,6 +121,18 @@ def _cmd_eval_list(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_eval_baseline(args: argparse.Namespace) -> int:
+    dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
+    report = run_single_pass_baseline(
+        dataset_path=dataset,
+        limit=args.limit,
+    )
+    save_path = save_report(report, Path(args.save) if args.save else None)
+    report["report_path"] = str(save_path)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def _resolve_compare_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     if args.base and args.target:
         return Path(args.base), Path(args.target)
@@ -137,6 +151,27 @@ def _cmd_eval_compare(args: argparse.Namespace) -> int:
     comparison["target_report"] = str(target_path)
     print(json.dumps(comparison, indent=2))
     return 0
+
+
+def _cmd_eval_gate(args: argparse.Namespace) -> int:
+    base_path, target_path = _resolve_compare_paths(args)
+    base = load_report(base_path)
+    target = load_report(target_path)
+    comparison = compare_reports(base, target)
+    gate = evaluate_regression_gate(
+        comparison=comparison,
+        min_quality_delta=args.min_quality_delta,
+        max_runtime_delta_sec=args.max_runtime_delta_sec,
+        min_shared_runs=args.min_shared_runs,
+    )
+    payload = {
+        "base_report": str(base_path),
+        "target_report": str(target_path),
+        "comparison": comparison,
+        "gate": gate,
+    }
+    print(json.dumps(payload, indent=2))
+    return 0 if gate["passed"] else 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -171,12 +206,28 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument("--limit", type=int)
     eval_run.add_argument("--save")
     eval_sub.add_parser("list", help="List saved benchmark reports")
+    eval_baseline = eval_sub.add_parser(
+        "baseline",
+        help="Run deterministic single-pass baseline benchmark",
+    )
+    eval_baseline.add_argument("--dataset")
+    eval_baseline.add_argument("--limit", type=int)
+    eval_baseline.add_argument("--save")
     eval_compare = eval_sub.add_parser(
         "compare",
         help="Compare two benchmark reports (defaults to latest two)",
     )
     eval_compare.add_argument("--base")
     eval_compare.add_argument("--target")
+    eval_gate = eval_sub.add_parser(
+        "gate",
+        help="Apply regression thresholds to report comparison",
+    )
+    eval_gate.add_argument("--base")
+    eval_gate.add_argument("--target")
+    eval_gate.add_argument("--min-quality-delta", type=float, default=0.0)
+    eval_gate.add_argument("--max-runtime-delta-sec", type=float)
+    eval_gate.add_argument("--min-shared-runs", type=int, default=1)
 
     sub.add_parser("health", help="Healthcheck DB and providers")
     return parser
@@ -197,8 +248,12 @@ def main() -> None:
         raise SystemExit(asyncio.run(_cmd_eval_run(args)))
     if args.command == "eval" and args.eval_command == "list":
         raise SystemExit(_cmd_eval_list(args))
+    if args.command == "eval" and args.eval_command == "baseline":
+        raise SystemExit(_cmd_eval_baseline(args))
     if args.command == "eval" and args.eval_command == "compare":
         raise SystemExit(_cmd_eval_compare(args))
+    if args.command == "eval" and args.eval_command == "gate":
+        raise SystemExit(_cmd_eval_gate(args))
     if args.command == "health":
         raise SystemExit(asyncio.run(_cmd_health()))
     raise SystemExit(1)

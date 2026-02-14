@@ -36,6 +36,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
 - SQLite persistence + memory context reuse (`rim/storage/`)
 - Benchmark runner + dataset (`rim/eval/`)
+- Deterministic single-pass baseline + regression gate (`rim eval baseline`, `rim eval gate`)
 - Local CLI entrypoint (`rim/cli.py`)
 
 Quickstart:
@@ -87,8 +88,10 @@ rim analyze --idea "Your idea here" --mode deep --json
 rim run logs <run_id>
 rim run feedback <run_id> --verdict accept --notes "Strong output"
 rim eval run --mode deep --limit 3
+rim eval baseline --limit 3
 rim eval list
 rim eval compare
+rim eval gate --min-quality-delta 0.0 --max-runtime-delta-sec 15
 ```
 
 Provider env vars:
