@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import rim.core.orchestrator as orchestrator_module
@@ -523,6 +524,142 @@ def test_orchestrator_runs_specialist_arbitration_loop_on_diversity_flags(
     assert arbitration_logs[0].status == "completed"
     assert arbitration_logs[0].meta["specialist_loop_enabled"] is True
     assert arbitration_logs[0].meta["specialist_count"] >= 1
+
+
+def test_orchestrator_applies_specialist_policy_file(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_decompose(*args, **kwargs):  # noqa: ANN001, ANN202
+        root = DecompositionNode(
+            depth=0,
+            component_text="Idea D4",
+            node_type="claim",
+            confidence=0.4,
+        )
+        return [root], "codex", {"stop_reason": "max_depth"}
+
+    async def fake_critics(*args, **kwargs):  # noqa: ANN001, ANN202
+        nodes = kwargs.get("nodes") or args[1]
+        return [
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="logic",
+                issue="No rollout criteria",
+                severity="high",
+                confidence=0.8,
+                suggested_fix="Define criteria",
+                provider="codex",
+            ),
+            CriticFinding(
+                node_id=nodes[0].id,
+                critic_type="execution",
+                issue="Unclear deployment gating",
+                severity="high",
+                confidence=0.7,
+                suggested_fix="Add gates",
+                provider="claude",
+            ),
+        ]
+
+    async def fake_run_arbitration(  # noqa: ANN001, ANN202
+        _router,
+        *,
+        reconciliation,
+        findings,
+        max_jobs,
+        devils_advocate_rounds,
+        devils_advocate_min_confidence,
+        specialist_loop_enabled,
+        specialist_max_jobs,
+        specialist_min_confidence,
+    ):
+        captured["max_jobs"] = max_jobs
+        captured["devils_advocate_rounds"] = devils_advocate_rounds
+        captured["devils_advocate_min_confidence"] = devils_advocate_min_confidence
+        captured["specialist_loop_enabled"] = specialist_loop_enabled
+        captured["specialist_max_jobs"] = specialist_max_jobs
+        captured["specialist_min_confidence"] = specialist_min_confidence
+        captured["disagreement_count"] = int(reconciliation.get("summary", {}).get("disagreement_count", 0))
+        captured["finding_count"] = len(findings)
+        return (
+            [
+                {
+                    "node_id": findings[0].node_id,
+                    "resolved_issue": "Specialist policy-driven arbitration",
+                    "rationale": "Policy selected specialist review depth.",
+                    "action": "merge",
+                    "confidence": 0.91,
+                    "round": "specialist",
+                }
+            ],
+            ["codex"],
+        )
+
+    async def fake_synthesize(*args, **kwargs):  # noqa: ANN001, ANN202
+        return (
+            {
+                "synthesized_idea": "Idea D4 refined",
+                "changes_summary": ["Added rollout gating rules."],
+                "residual_risks": [],
+                "next_experiments": ["Test rollout gates on staging."],
+                "confidence_score": 0.82,
+            },
+            ["claude"],
+        )
+
+    policy_path = tmp_path / "specialist_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "policy_env": {
+                        "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": 1,
+                        "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": 4,
+                        "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": 0.91,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(orchestrator_module, "decompose_idea", fake_decompose)
+    monkeypatch.setattr(orchestrator_module, "run_critics", fake_critics)
+    monkeypatch.setattr(orchestrator_module, "run_arbitration", fake_run_arbitration)
+    monkeypatch.setattr(orchestrator_module, "synthesize_idea", fake_synthesize)
+    monkeypatch.setenv("RIM_MAX_ANALYSIS_CYCLES", "1")
+    monkeypatch.setenv("RIM_ENABLE_DISAGREEMENT_ARBITRATION", "1")
+    monkeypatch.setenv("RIM_ARBITRATION_MAX_JOBS", "2")
+    monkeypatch.setenv("RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION", "0")
+    monkeypatch.setenv("RIM_RECONCILE_MIN_UNIQUE_CRITICS", "3")
+    monkeypatch.setenv("RIM_RECONCILE_MAX_SINGLE_CRITIC_SHARE", "0.7")
+    monkeypatch.setenv("RIM_SPECIALIST_POLICY_PATH", str(policy_path))
+    monkeypatch.delenv("RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP", raising=False)
+    monkeypatch.delenv("RIM_SPECIALIST_ARBITRATION_MAX_JOBS", raising=False)
+    monkeypatch.delenv("RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE", raising=False)
+
+    repo = RunRepository(db_path=tmp_path / "rim_orchestrator_specialist_policy.db")
+    orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
+    request = AnalyzeRequest(idea="Idea D4", mode="deep")
+    run_id = orchestrator.create_run(request, status="running")
+
+    result = asyncio.run(orchestrator.execute_run(run_id, request))
+    assert result.synthesized_idea == "Idea D4 refined"
+    assert captured["specialist_loop_enabled"] is True
+    assert captured["specialist_max_jobs"] == 4
+    assert captured["specialist_min_confidence"] == 0.91
+
+    arbitration_logs = [
+        log
+        for log in orchestrator.get_run_logs(run_id).logs
+        if log.stage == "challenge_arbitration"
+    ]
+    assert len(arbitration_logs) == 1
+    assert arbitration_logs[0].meta["specialist_policy_applied"] is True
+    assert arbitration_logs[0].meta["specialist_policy_path"] == str(policy_path)
 
 
 def test_orchestrator_runs_executable_verification(

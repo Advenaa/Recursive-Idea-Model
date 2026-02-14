@@ -155,22 +155,23 @@ Environment variables:
 47. `RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP` default `1` in deep mode (run specialist arbitration on diversity-flagged disagreements)
 48. `RIM_SPECIALIST_ARBITRATION_MAX_JOBS` default `2` (max specialist arbitration reviews per cycle)
 49. `RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE` default `0.78` (minimum arbitration confidence before specialist follow-up)
-50. `RIM_ENABLE_EXECUTABLE_VERIFICATION` default `1` in deep mode (run safe executable checks from prefixed constraints)
-51. `RIM_EXEC_VERIFY_MAX_CHECKS` default `5` (max executable constraint checks per cycle)
-52. `RIM_ENABLE_PYTHON_EXEC_CHECKS` default `0` (allow `python_exec:` subprocess checks)
-53. `RIM_PYTHON_EXEC_TIMEOUT_SEC` default `2` (timeout per `python_exec:` check)
-54. `RIM_ENABLE_ADVANCED_VERIFICATION` default `1` in deep mode (run solver/simulation/data-backed verification)
-55. `RIM_ADV_VERIFY_MAX_CHECKS` default `4` (max advanced verification checks per cycle)
-56. `RIM_ADV_VERIFY_SIMULATION_TRIALS` default `200` (Monte Carlo samples per simulation check)
-57. `RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE` default `0.7` (minimum simulation pass-rate threshold)
-58. `RIM_ADV_VERIFY_SIMULATION_SEED` default `42` (deterministic simulation seed)
-59. `RIM_ADV_VERIFY_DATA_PATH` default `rim/eval/data/benchmark_ideas.jsonl` (local reference dataset path for `data:` checks)
-60. `RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC` default `8` (timeout for optional external advanced-verification adapters)
-61. `RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD` optional command (external backend for `solver:` checks)
-62. `RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD` optional command (external backend for `simulate:` checks)
-63. `RIM_ADV_VERIFY_EXTERNAL_DATA_CMD` optional command (external backend for `data:` checks)
-64. Reference adapter template: `scripts/advanced_verify_adapter.py` (stdin JSON -> stdout JSON contract)
-65. Optional adapter env: `RIM_ADV_VERIFY_ADAPTER_SOLVER_BACKEND=z3` (use z3 backend when available, fallback otherwise)
+50. `RIM_SPECIALIST_POLICY_PATH` optional JSON policy file from `rim eval train-specialist-policy` (applies specialist arbitration defaults before env overrides)
+51. `RIM_ENABLE_EXECUTABLE_VERIFICATION` default `1` in deep mode (run safe executable checks from prefixed constraints)
+52. `RIM_EXEC_VERIFY_MAX_CHECKS` default `5` (max executable constraint checks per cycle)
+53. `RIM_ENABLE_PYTHON_EXEC_CHECKS` default `0` (allow `python_exec:` subprocess checks)
+54. `RIM_PYTHON_EXEC_TIMEOUT_SEC` default `2` (timeout per `python_exec:` check)
+55. `RIM_ENABLE_ADVANCED_VERIFICATION` default `1` in deep mode (run solver/simulation/data-backed verification)
+56. `RIM_ADV_VERIFY_MAX_CHECKS` default `4` (max advanced verification checks per cycle)
+57. `RIM_ADV_VERIFY_SIMULATION_TRIALS` default `200` (Monte Carlo samples per simulation check)
+58. `RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE` default `0.7` (minimum simulation pass-rate threshold)
+59. `RIM_ADV_VERIFY_SIMULATION_SEED` default `42` (deterministic simulation seed)
+60. `RIM_ADV_VERIFY_DATA_PATH` default `rim/eval/data/benchmark_ideas.jsonl` (local reference dataset path for `data:` checks)
+61. `RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC` default `8` (timeout for optional external advanced-verification adapters)
+62. `RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD` optional command (external backend for `solver:` checks)
+63. `RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD` optional command (external backend for `simulate:` checks)
+64. `RIM_ADV_VERIFY_EXTERNAL_DATA_CMD` optional command (external backend for `data:` checks)
+65. Reference adapter template: `scripts/advanced_verify_adapter.py` (stdin JSON -> stdout JSON contract)
+66. Optional adapter env: `RIM_ADV_VERIFY_ADAPTER_SOLVER_BACKEND=z3` (use z3 backend when available, fallback otherwise)
 
 ## 5) Modes and Runtime Controls
 
@@ -414,6 +415,7 @@ Additional eval commands:
 7. `rim eval calibrate --report <report.json> --target-quality 0.65 --target-runtime-sec 60` to recommend depth-allocator env settings from benchmark signals.
 8. `rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-runtime-sec 60` to run benchmark + calibration in one step.
 9. `rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate multiple reports into a depth-policy recommendation.
+10. `rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into specialist-arbitration policy defaults.
 
 ## 9) Orchestration Logic
 

@@ -7,6 +7,7 @@ from rim.eval import runner
 from rim.eval.runner import (
     build_blind_review_packet,
     calibrate_depth_allocator,
+    calibrate_specialist_arbitration_policy,
     calibration_env_exports,
     compare_reports,
     evaluate_regression_gate,
@@ -16,6 +17,7 @@ from rim.eval.runner import (
     save_blind_review_packet,
     save_report,
     train_depth_policy,
+    train_specialist_arbitration_policy,
 )
 
 
@@ -392,4 +394,90 @@ def test_train_depth_policy_aggregates_report_calibrations() -> None:
     env = payload["policy_env"]
     assert "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE" in env
     assert "RIM_MAX_ANALYSIS_CYCLES" in env
+    assert payload["recommended_exports"]
+
+
+def test_calibrate_specialist_arbitration_policy_recommends_more_specialist_capacity() -> None:
+    report = {
+        "dataset_size": 10,
+        "average_quality_score": 0.5,
+        "average_runtime_sec": 55.0,
+        "failure_count": 1,
+        "runs": [
+            {
+                "status": "completed",
+                "telemetry": {
+                    "disagreement_count": 3,
+                    "diversity_flagged_count": 2,
+                    "specialist_count": 1,
+                },
+            },
+            {
+                "status": "completed",
+                "telemetry": {
+                    "disagreement_count": 2,
+                    "diversity_flagged_count": 1,
+                    "specialist_count": 1,
+                },
+            },
+        ],
+    }
+    calibration = calibrate_specialist_arbitration_policy(
+        report,
+        target_quality=0.7,
+        target_runtime_sec=60.0,
+    )
+    env = calibration["recommended_env"]
+    assert env["RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP"] == 1
+    assert env["RIM_SPECIALIST_ARBITRATION_MAX_JOBS"] >= 2
+    assert env["RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"] > 0.78
+
+
+def test_train_specialist_arbitration_policy_aggregates_reports() -> None:
+    reports = [
+        {
+            "created_at": "2026-02-14T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.55,
+            "average_runtime_sec": 62.0,
+            "failure_count": 1,
+            "runs": [
+                {
+                    "status": "completed",
+                    "telemetry": {
+                        "disagreement_count": 2,
+                        "diversity_flagged_count": 1,
+                        "specialist_count": 1,
+                    },
+                }
+            ],
+        },
+        {
+            "created_at": "2026-02-15T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.7,
+            "average_runtime_sec": 50.0,
+            "failure_count": 0,
+            "runs": [
+                {
+                    "status": "completed",
+                    "telemetry": {
+                        "disagreement_count": 1,
+                        "diversity_flagged_count": 0,
+                        "specialist_count": 0,
+                    },
+                }
+            ],
+        },
+    ]
+    payload = train_specialist_arbitration_policy(
+        reports,
+        target_quality=0.7,
+        target_runtime_sec=60.0,
+    )
+    assert payload["report_count"] == 2
+    env = payload["policy_env"]
+    assert "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP" in env
+    assert "RIM_SPECIALIST_ARBITRATION_MAX_JOBS" in env
+    assert "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE" in env
     assert payload["recommended_exports"]

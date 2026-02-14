@@ -174,6 +174,91 @@ def _single_pass_baseline_result(idea: str, run_id: str) -> AnalyzeResult:
     )
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
+    getter = getattr(orchestrator, "get_run_logs", None)
+    if getter is None or not callable(getter):
+        return {}
+    try:
+        payload = getter(run_id)
+    except Exception:  # noqa: BLE001
+        return {}
+    logs = getattr(payload, "logs", None)
+    if not isinstance(logs, list):
+        return {}
+
+    telemetry = {
+        "disagreement_count": 0,
+        "diversity_flagged_count": 0,
+        "arbitration_resolved_count": 0,
+        "devils_advocate_count": 0,
+        "specialist_count": 0,
+        "spawn_selected_count": 0,
+        "spawn_dynamic_count": 0,
+    }
+    for item in logs:
+        stage = str(getattr(item, "stage", "")).strip().lower()
+        meta = getattr(item, "meta", None)
+        if not isinstance(meta, dict):
+            continue
+        if stage == "challenge_reconciliation":
+            telemetry["disagreement_count"] = max(
+                telemetry["disagreement_count"],
+                _to_int(meta.get("disagreement_count"), 0),
+            )
+            telemetry["diversity_flagged_count"] = max(
+                telemetry["diversity_flagged_count"],
+                _to_int(meta.get("diversity_flagged_count"), 0),
+            )
+            continue
+        if stage == "challenge_arbitration":
+            telemetry["arbitration_resolved_count"] = max(
+                telemetry["arbitration_resolved_count"],
+                _to_int(meta.get("resolved_count"), 0),
+            )
+            telemetry["devils_advocate_count"] = max(
+                telemetry["devils_advocate_count"],
+                _to_int(meta.get("devils_advocate_count"), 0),
+            )
+            telemetry["specialist_count"] = max(
+                telemetry["specialist_count"],
+                _to_int(meta.get("specialist_count"), 0),
+            )
+            continue
+        if stage == "specialization_spawn":
+            telemetry["spawn_selected_count"] = max(
+                telemetry["spawn_selected_count"],
+                _to_int(meta.get("selected_count"), 0),
+            )
+            extra = list(meta.get("extra_critics") or [])
+            dynamic = [
+                entry
+                for entry in extra
+                if isinstance(entry, dict) and bool(entry.get("dynamic"))
+            ]
+            telemetry["spawn_dynamic_count"] = max(
+                telemetry["spawn_dynamic_count"],
+                len(dynamic),
+            )
+
+    if not any(value for value in telemetry.values()):
+        return {}
+    return telemetry
+
+
 async def run_benchmark(
     orchestrator: RimOrchestrator,
     dataset_path: Path = DEFAULT_DATASET_PATH,
@@ -201,6 +286,7 @@ async def run_benchmark(
             result = await orchestrator.analyze(request)
             runtime_sec = round(time.perf_counter() - run_started, 3)
             score = evaluate_run(result, heuristic_reviewer, domain=request.domain)
+            telemetry = _extract_run_telemetry(orchestrator, result.run_id)
             runs.append(
                 {
                     "id": item.get("id"),
@@ -215,6 +301,7 @@ async def run_benchmark(
                     "changes_summary": list(result.changes_summary),
                     "residual_risks": list(result.residual_risks),
                     "next_experiments": list(result.next_experiments),
+                    "telemetry": telemetry,
                 }
             )
         except Exception as exc:  # noqa: BLE001
@@ -654,6 +741,306 @@ def calibration_env_exports(calibration: dict[str, Any]) -> list[str]:
         else:
             lines.append(f"export {key}={value}")
     return lines
+
+
+def _specialist_report_signals(report: dict[str, Any]) -> dict[str, float]:
+    runs = report.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    completed = [
+        item
+        for item in runs
+        if isinstance(item, dict) and str(item.get("status") or "").strip().lower() == "completed"
+    ]
+    if not completed:
+        return {
+            "completed_runs": 0.0,
+            "avg_disagreement_count": 0.0,
+            "avg_diversity_flagged_count": 0.0,
+            "avg_specialist_count": 0.0,
+            "avg_spawn_dynamic_count": 0.0,
+        }
+
+    disagreement_total = 0.0
+    diversity_total = 0.0
+    specialist_total = 0.0
+    dynamic_total = 0.0
+    for item in completed:
+        telemetry = item.get("telemetry")
+        if not isinstance(telemetry, dict):
+            continue
+        disagreement_total += _to_float(telemetry.get("disagreement_count"), 0.0)
+        diversity_total += _to_float(telemetry.get("diversity_flagged_count"), 0.0)
+        specialist_total += _to_float(telemetry.get("specialist_count"), 0.0)
+        dynamic_total += _to_float(telemetry.get("spawn_dynamic_count"), 0.0)
+
+    count = float(len(completed))
+    return {
+        "completed_runs": count,
+        "avg_disagreement_count": round(disagreement_total / count, 4),
+        "avg_diversity_flagged_count": round(diversity_total / count, 4),
+        "avg_specialist_count": round(specialist_total / count, 4),
+        "avg_spawn_dynamic_count": round(dynamic_total / count, 4),
+    }
+
+
+def calibrate_specialist_arbitration_policy(
+    report: dict[str, Any],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    avg_quality = float(report.get("average_quality_score", 0.0))
+    avg_runtime = float(report.get("average_runtime_sec", 0.0))
+    dataset_size = max(1, int(report.get("dataset_size", 1)))
+    failures = int(report.get("failure_count", 0))
+    failure_rate = failures / float(dataset_size)
+    telemetry = _specialist_report_signals(report)
+
+    quality_gap = float(target_quality) - avg_quality
+    quality_pressure = _clamp_float(quality_gap / max(float(target_quality), 0.05), -1.0, 1.0)
+    runtime_pressure = 0.0
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        runtime_pressure = (avg_runtime - float(target_runtime_sec)) / float(target_runtime_sec)
+
+    disagreement_pressure = _clamp_float(
+        float(telemetry["avg_disagreement_count"]) / 2.0,
+        0.0,
+        1.0,
+    )
+    diversity_pressure = _clamp_float(
+        float(telemetry["avg_diversity_flagged_count"]) / 2.0,
+        0.0,
+        1.0,
+    )
+    specialist_pressure = _clamp_float(
+        float(telemetry["avg_specialist_count"]) / 2.0,
+        0.0,
+        1.0,
+    )
+    review_pressure = (
+        (0.7 * quality_pressure)
+        + (0.6 * disagreement_pressure)
+        + (0.35 * diversity_pressure)
+        + (0.2 * specialist_pressure)
+        - (0.5 * max(runtime_pressure, 0.0))
+        - (0.45 * failure_rate)
+    )
+    review_pressure = _clamp_float(review_pressure, -1.0, 1.0)
+
+    base = {
+        "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": 1,
+        "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": 2,
+        "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": 0.78,
+    }
+    disable_for_latency = (
+        quality_pressure <= 0.0
+        and max(runtime_pressure, 0.0) > 0.3
+        and disagreement_pressure < 0.25
+        and diversity_pressure < 0.2
+    )
+    enable_loop = 0 if disable_for_latency else 1
+    if review_pressure < -0.45:
+        enable_loop = 0
+    if review_pressure > 0.1:
+        enable_loop = 1
+
+    max_jobs = _clamp_int(
+        int(
+            round(
+                base["RIM_SPECIALIST_ARBITRATION_MAX_JOBS"]
+                + (2.0 * max(review_pressure, 0.0))
+                + (1.0 * diversity_pressure)
+            )
+        ),
+        0,
+        6,
+    )
+    min_confidence = round(
+        _clamp_float(
+            base["RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"] + (0.1 * review_pressure),
+            0.6,
+            0.95,
+        ),
+        3,
+    )
+    if enable_loop == 0:
+        max_jobs = 0
+
+    rationale: list[str] = []
+    if quality_pressure > 0.15:
+        rationale.append("Average quality is below target; specialist arbitration is expanded.")
+    elif quality_pressure < -0.15:
+        rationale.append("Average quality is above target; specialist arbitration can be relaxed.")
+    if disagreement_pressure > 0.25 or diversity_pressure > 0.2:
+        rationale.append("Frequent disagreement/diversity flags suggest stronger specialist review.")
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        if avg_runtime > float(target_runtime_sec):
+            rationale.append("Average runtime exceeds target; specialist load is moderated.")
+        else:
+            rationale.append("Average runtime is within target runtime budget.")
+    if failure_rate > 0.2:
+        rationale.append("Failure rate is elevated; policy avoids aggressive arbitration expansion.")
+
+    recommended_env = {
+        "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": enable_loop,
+        "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": max_jobs,
+        "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": min_confidence,
+    }
+    return {
+        "inputs": {
+            "average_quality_score": avg_quality,
+            "average_runtime_sec": avg_runtime,
+            "failure_rate": round(failure_rate, 4),
+            "dataset_size": dataset_size,
+            "target_quality": float(target_quality),
+            "target_runtime_sec": target_runtime_sec,
+            "telemetry": telemetry,
+        },
+        "signals": {
+            "quality_pressure": round(quality_pressure, 4),
+            "runtime_pressure": round(runtime_pressure, 4),
+            "disagreement_pressure": round(disagreement_pressure, 4),
+            "diversity_pressure": round(diversity_pressure, 4),
+            "specialist_pressure": round(specialist_pressure, 4),
+            "review_pressure": round(review_pressure, 4),
+        },
+        "base": base,
+        "recommended_env": recommended_env,
+        "rationale": rationale,
+    }
+
+
+def train_specialist_arbitration_policy(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    valid_reports: list[dict[str, Any]] = []
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        if int(report.get("dataset_size", 0)) <= 0:
+            continue
+        valid_reports.append(report)
+
+    if not valid_reports:
+        empty_policy = {
+            "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": 1,
+            "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": 2,
+            "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": 0.78,
+        }
+        return {
+            "report_count": 0,
+            "policy_env": empty_policy,
+            "rationale": ["No valid reports were available; returning default specialist policy."],
+        }
+
+    weighted_enable = 0.0
+    weighted_jobs = 0.0
+    weighted_min_conf = 0.0
+    total_weight = 0.0
+    quality_sum = 0.0
+    runtime_sum = 0.0
+    failure_sum = 0.0
+    disagreement_sum = 0.0
+    diversity_sum = 0.0
+    samples: list[dict[str, Any]] = []
+
+    for report in valid_reports:
+        calibration = calibrate_specialist_arbitration_policy(
+            report,
+            target_quality=target_quality,
+            target_runtime_sec=target_runtime_sec,
+        )
+        env = calibration["recommended_env"]
+        report_quality = float(report.get("average_quality_score", 0.0))
+        report_failure = (
+            float(report.get("failure_count", 0)) / max(1, int(report.get("dataset_size", 1)))
+        )
+        telemetry = calibration.get("inputs", {}).get("telemetry", {})
+        avg_disagreement = _to_float(
+            telemetry.get("avg_disagreement_count") if isinstance(telemetry, dict) else 0.0,
+            0.0,
+        )
+        avg_diversity = _to_float(
+            telemetry.get("avg_diversity_flagged_count") if isinstance(telemetry, dict) else 0.0,
+            0.0,
+        )
+        weight = max(0.1, report_quality + 0.2 - (0.25 * report_failure) + (0.05 * avg_disagreement))
+        total_weight += weight
+        quality_sum += report_quality
+        runtime_sum += float(report.get("average_runtime_sec", 0.0))
+        failure_sum += report_failure
+        disagreement_sum += avg_disagreement
+        diversity_sum += avg_diversity
+
+        weighted_enable += float(env["RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP"]) * weight
+        weighted_jobs += float(env["RIM_SPECIALIST_ARBITRATION_MAX_JOBS"]) * weight
+        weighted_min_conf += float(env["RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"]) * weight
+        samples.append(
+            {
+                "created_at": report.get("created_at"),
+                "mode": report.get("mode"),
+                "weight": round(weight, 4),
+                "recommended_env": env,
+            }
+        )
+
+    if total_weight <= 0:
+        total_weight = float(len(valid_reports))
+    enable_loop = 1 if (weighted_enable / total_weight) >= 0.5 else 0
+    max_jobs = _clamp_int(
+        int(round(weighted_jobs / total_weight)),
+        0,
+        6,
+    )
+    if enable_loop == 0:
+        max_jobs = 0
+    policy_env = {
+        "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": enable_loop,
+        "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": max_jobs,
+        "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": round(
+            _clamp_float(weighted_min_conf / total_weight, 0.6, 0.95),
+            3,
+        ),
+    }
+    avg_quality = quality_sum / len(valid_reports)
+    avg_runtime = runtime_sum / len(valid_reports)
+    avg_failure = failure_sum / len(valid_reports)
+    avg_disagreement = disagreement_sum / len(valid_reports)
+    avg_diversity = diversity_sum / len(valid_reports)
+    rationale = [
+        "Policy aggregates specialist-calibration recommendations using weighted averaging.",
+    ]
+    if avg_quality < target_quality:
+        rationale.append("Average quality is below target, so specialist arbitration remains active.")
+    else:
+        rationale.append("Average quality meets target, so specialist arbitration can be balanced.")
+    if target_runtime_sec is not None and target_runtime_sec > 0 and avg_runtime > target_runtime_sec:
+        rationale.append("Average runtime exceeds target, so specialist job volume is moderated.")
+    if avg_failure > 0.2:
+        rationale.append("Failure rate is elevated; policy avoids aggressive escalation.")
+    if avg_disagreement > 0.5 or avg_diversity > 0.4:
+        rationale.append("Disagreement/diversity pressure supports stronger specialist coverage.")
+
+    return {
+        "report_count": len(valid_reports),
+        "policy_env": policy_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": policy_env}),
+        "summary": {
+            "average_quality_score": round(avg_quality, 4),
+            "average_runtime_sec": round(avg_runtime, 4),
+            "average_failure_rate": round(avg_failure, 4),
+            "average_disagreement_count": round(avg_disagreement, 4),
+            "average_diversity_flagged_count": round(avg_diversity, 4),
+            "target_quality": target_quality,
+            "target_runtime_sec": target_runtime_sec,
+        },
+        "rationale": rationale,
+        "samples": samples[:20],
+    }
 
 
 def train_depth_policy(

@@ -170,6 +170,75 @@ def _parse_float_env(
     return max(lower, min(upper, value))
 
 
+def _coerce_bool(value: object, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _coerce_int(value: object, default: int, *, lower: int, upper: int) -> int:
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return max(lower, min(upper, parsed))
+
+
+def _coerce_float(value: object, default: float, *, lower: float, upper: float) -> float:
+    try:
+        parsed = float(str(value))
+    except (TypeError, ValueError):
+        parsed = float(default)
+    return max(lower, min(upper, parsed))
+
+
+def _extract_policy_env(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        return {}
+    direct = {
+        key: value
+        for key, value in payload.items()
+        if isinstance(key, str) and key.startswith("RIM_")
+    }
+    if direct:
+        return direct
+    for key in ("policy_env", "recommended_env", "policy", "calibration"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            extracted = _extract_policy_env(nested)
+            if extracted:
+                return extracted
+    return {}
+
+
+def _load_specialist_policy_env(path_value: str) -> tuple[dict[str, object], str | None]:
+    path = str(path_value or "").strip()
+    if not path:
+        return {}, None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.loads(handle.read())
+    except Exception as exc:  # noqa: BLE001
+        return {}, str(exc)
+    env = _extract_policy_env(payload)
+    allowed = {
+        "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP",
+        "RIM_SPECIALIST_ARBITRATION_MAX_JOBS",
+        "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE",
+    }
+    filtered = {key: value for key, value in env.items() if key in allowed}
+    if not filtered:
+        return {}, "No specialist arbitration keys found in policy file."
+    return filtered, None
+
+
 def _next_cycle_memory_context(
     current_memory: list[str],
     synthesis: dict[str, object],
@@ -421,19 +490,46 @@ class RimOrchestrator:
                 lower=0.0,
                 upper=1.0,
             )
+            specialist_policy_path = str(os.getenv("RIM_SPECIALIST_POLICY_PATH", "")).strip()
+            specialist_policy_env: dict[str, object] = {}
+            specialist_policy_error: str | None = None
+            if specialist_policy_path:
+                specialist_policy_env, specialist_policy_error = _load_specialist_policy_env(
+                    specialist_policy_path
+                )
+            specialist_loop_default = request.mode == "deep"
+            specialist_max_jobs_default = 2
+            specialist_min_conf_default = 0.78
+            if specialist_policy_env:
+                specialist_loop_default = _coerce_bool(
+                    specialist_policy_env.get("RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP"),
+                    specialist_loop_default,
+                )
+                specialist_max_jobs_default = _coerce_int(
+                    specialist_policy_env.get("RIM_SPECIALIST_ARBITRATION_MAX_JOBS"),
+                    specialist_max_jobs_default,
+                    lower=0,
+                    upper=6,
+                )
+                specialist_min_conf_default = _coerce_float(
+                    specialist_policy_env.get("RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"),
+                    specialist_min_conf_default,
+                    lower=0.0,
+                    upper=1.0,
+                )
             enable_specialist_arbitration_loop = _parse_bool_env(
                 "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP",
-                request.mode == "deep",
+                specialist_loop_default,
             )
             specialist_arbitration_max_jobs = _parse_int_env(
                 "RIM_SPECIALIST_ARBITRATION_MAX_JOBS",
-                2,
+                specialist_max_jobs_default,
                 lower=0,
                 upper=6,
             )
             specialist_arbitration_min_confidence = _parse_float_env(
                 "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE",
-                0.78,
+                specialist_min_conf_default,
                 lower=0.0,
                 upper=1.0,
             )
@@ -442,7 +538,13 @@ class RimOrchestrator:
                 run_id=run_id,
                 stage="queue",
                 status="completed",
-                meta={"mode": request.mode, "max_cycles": max_cycles},
+                meta={
+                    "mode": request.mode,
+                    "max_cycles": max_cycles,
+                    "specialist_policy_applied": bool(specialist_policy_env),
+                    "specialist_policy_path": specialist_policy_path or None,
+                    "specialist_policy_error": specialist_policy_error,
+                },
             )
             memory_context = self.repository.get_memory_context(
                 limit=8,
@@ -608,6 +710,9 @@ class RimOrchestrator:
                                 "specialist_max_jobs": specialist_arbitration_max_jobs,
                                 "specialist_min_confidence": specialist_arbitration_min_confidence,
                                 "specialist_count": specialist_count,
+                                "specialist_policy_applied": bool(specialist_policy_env),
+                                "specialist_policy_path": specialist_policy_path or None,
+                                "specialist_policy_error": specialist_policy_error,
                             },
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -628,6 +733,9 @@ class RimOrchestrator:
                                 "specialist_loop_enabled": enable_specialist_arbitration_loop,
                                 "specialist_max_jobs": specialist_arbitration_max_jobs,
                                 "specialist_min_confidence": specialist_arbitration_min_confidence,
+                                "specialist_policy_applied": bool(specialist_policy_env),
+                                "specialist_policy_path": specialist_policy_path or None,
+                                "specialist_policy_error": specialist_policy_error,
                                 "error": _error_from_exception(exc, default_stage="challenge_arbitration"),
                             },
                         )

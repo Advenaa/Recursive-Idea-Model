@@ -123,6 +123,7 @@ rim eval blindpack --limit 20
 rim eval calibrate --target-quality 0.65 --target-runtime-sec 60
 rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-runtime-sec 60
 rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
+rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 ```
 
 Provider env vars:
@@ -172,6 +173,8 @@ export RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE=0.72
 export RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP=1
 export RIM_SPECIALIST_ARBITRATION_MAX_JOBS=2
 export RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE=0.78
+# Optional trained specialist policy file from `rim eval train-specialist-policy` output
+export RIM_SPECIALIST_POLICY_PATH=rim/eval/reports/specialist_policy.json
 export RIM_SPAWN_MIN_ROLE_SCORE=1.0
 export RIM_SPAWN_MAX_SPECIALISTS_DEEP=3
 export RIM_SPAWN_MAX_SPECIALISTS_FAST=1

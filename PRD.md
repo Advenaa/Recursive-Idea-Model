@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + dynamic specialist increments): `100` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + specialist-policy increments): `103` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -283,7 +283,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Orchestration depth/breadth policy:
   recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration (`rim eval calibrate`, `rim eval train-policy`) available, but there is no learned depth-vs-breadth policy training yet.
 - Challenge reconciliation:
-  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, and specialist follow-up arbitration loops are implemented; learned specialist arbitration policy is still missing.
+  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, specialist follow-up arbitration loops, benchmark telemetry capture, and offline specialist-policy training/application (`rim eval train-specialist-policy` + `RIM_SPECIALIST_POLICY_PATH`) are implemented; online adaptive specialist policy updates are still missing.
 - Verification layer:
   deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, and baseline advanced adapters (`solver:`, `simulate:`, `data:`) are implemented, including pluggable external adapter command hooks; formal theorem/constraint tooling and production external integrations are still missing.
 - Specialization layer:
@@ -299,7 +299,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 ### 20.4 Gap-Closure Priorities
 
 1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration (`rim eval calibrate` + `rim eval calibrate-loop` implemented; policy-learning automation still pending).
-2. P0: evolve specialist arbitration from heuristic triggers to learned specialist policy and dynamic role contracts.
+2. P0: evolve specialist arbitration from current offline-trained policy defaults to online adaptive specialist policy and dynamic role contracts.
 3. P1: add specialization layer with dynamic role/tool selection contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
 5. P2: upgrade memory to episodic/working/tool stores and implement folding triggers.
