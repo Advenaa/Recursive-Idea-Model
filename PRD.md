@@ -224,29 +224,32 @@ Each run must return JSON with this minimum schema:
 3. Quality scoring rubric weights (rigor vs novelty vs practicality)?
 4. Minimum acceptable deep mode runtime for your workflow?
 
-## 17) Implementation Status (February 14, 2026)
+## 17) MVP Completion Record
 
-### Milestone Status
+- Status: MVP scope complete
+- Completion date: February 14, 2026
+- Completion commit (main): `c938f09`
+- Validation at completion: `35` passing tests and successful compile checks
+- Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
-- M1 Foundation: completed
-- M2 Core Pipeline: completed
-- M3 Memory: completed
-- M4 Evaluation: completed for benchmark, baseline comparator, report compare, and regression gate
-- M5 Hardening: completed for retries, structured error contract, partial-run behavior, telemetry logs, and CI
+## 18) Acceptance Checklist
 
-### Delivered Capabilities
+- AC-1 Deep mode default in API and CLI: done
+- AC-2 Recursive decomposition with stop conditions: done
+- AC-3 Parallel critic execution: done
+- AC-4 Multi-pass synthesis with structured output: done
+- AC-5 Persistent run storage and memory reuse: done
+- AC-6 Feedback loop updates memory scores and stores feedback: done
+- AC-7 API endpoints for analyze, runs, logs, feedback, and health: done
+- AC-8 CLI parity for analyze/run/eval workflows: done
+- AC-9 Idempotent `run_id` submission (reuse + conflict detection): done
+- AC-10 Benchmark baseline/compare/gate workflow: done
+- AC-11 Structured error contract + partial-run behavior + retries: done
+- AC-12 CI pipeline for compile + tests on push/PR: done
 
-- Deep mode default with recursive decomposition + branch/runtime controls
-- Parallel critic stage and multi-pass synthesis
-- Persistent run artifacts, memory reuse, and feedback loop
-- API endpoints: `/analyze`, `/runs`, `/runs/{run_id}`, `/runs/{run_id}/logs`, `/runs/{run_id}/feedback`, `/health`
-- Idempotent API submission with `run_id`
-- CLI coverage for analyze, run inspection/list/logs/feedback, and eval workflows
-- Evaluation workflows: `eval run`, `eval baseline`, `eval compare`, `eval gate`, `eval duel`
-- GitHub Actions CI for compile + tests on push/PR
-
-### Remaining Post-MVP Enhancements
+## 19) Post-MVP Roadmap (v0.2)
 
 - Replace heuristic scoring with a stronger domain-weighted rubric
-- Expand benchmark set to a stable 20-idea canonical pack with blind-review protocol
-- Add explicit run cancel/retry controls
+- Finalize a canonical 20-idea benchmark pack and blind-review process
+- Add explicit run cancel/retry controls in API and CLI
+- Add richer evaluation analytics (domain-level trend and regression dashboards)
