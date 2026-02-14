@@ -178,6 +178,11 @@ export RIM_ADV_VERIFY_SIMULATION_TRIALS=200
 export RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE=0.7
 export RIM_ADV_VERIFY_SIMULATION_SEED=42
 export RIM_ADV_VERIFY_DATA_PATH=rim/eval/data/benchmark_ideas.jsonl
+export RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC=8
+# Optional external adapters (stdin JSON in, stdout JSON out)
+export RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD=""
+export RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD=""
+export RIM_ADV_VERIFY_EXTERNAL_DATA_CMD=""
 ```
 
 Verification constraint formats:
@@ -193,6 +198,7 @@ Verification constraint formats:
 - Example: `simulate: confidence_score >= 0.65 | trials=300 | min_pass_rate=0.75`
 - Example: `data: compliance, audit | path=rim/eval/data/benchmark_ideas.jsonl | min_overlap=0.5`
 - `python_exec:` snippets receive `context` and should set `passed = True|False` (optional `detail` string).
+- External adapter command contract: read one JSON object from stdin with `{check_type,payload,context,synthesis}` and print JSON `{passed: bool, result?: any, error?: string}`.
 
 Self-iteration loop:
 

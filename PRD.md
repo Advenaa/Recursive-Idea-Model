@@ -285,7 +285,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Challenge reconciliation:
   consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, and baseline role-diversity guardrails are implemented; specialist adaptive arbitration loops are still missing.
 - Verification layer:
-  deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, and baseline advanced adapters (`solver:`, `simulate:`, `data:`) are implemented, but no formal theorem/constraint tooling or external simulation/data integrations yet.
+  deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, and baseline advanced adapters (`solver:`, `simulate:`, `data:`) are implemented, including pluggable external adapter command hooks; formal theorem/constraint tooling and production external integrations are still missing.
 - Specialization layer:
   domain-specialist spawning and scored heuristic role-selection are implemented (with thresholded specialist budgets and rationale metadata), but no learned multi-role agent factory with tool-routing policies.
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import ast
+import json
+import shlex
+import subprocess
 import random
 import re
 from pathlib import Path
@@ -182,6 +185,93 @@ def _run_solver_check(expression: str, context: dict[str, Any]) -> dict[str, obj
         }
 
 
+def _normalize_external_command(command: str | None) -> list[str] | None:
+    raw = str(command or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = shlex.split(raw)
+    except ValueError:
+        return None
+    return parsed if parsed else None
+
+
+def _run_external_adapter(
+    *,
+    check_type: str,
+    payload: str,
+    synthesis: dict[str, object],
+    context: dict[str, Any],
+    command: str | None,
+    timeout_sec: int,
+) -> dict[str, object] | None:
+    cmd = _normalize_external_command(command)
+    if cmd is None:
+        return None
+    request_payload = {
+        "check_type": check_type,
+        "payload": payload,
+        "context": context,
+        "synthesis": synthesis,
+    }
+    try:
+        completed = subprocess.run(
+            cmd,
+            input=json.dumps(request_payload),
+            text=True,
+            capture_output=True,
+            timeout=max(1, int(timeout_sec)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "check_type": check_type,
+            "passed": False,
+            "result": None,
+            "error": f"external adapter timed out after {timeout_sec}s",
+        }
+    except OSError as exc:
+        return {
+            "check_type": check_type,
+            "passed": False,
+            "result": None,
+            "error": f"external adapter failed to execute: {exc}",
+        }
+
+    raw = str(completed.stdout or "").strip()
+    if not raw:
+        stderr_text = str(completed.stderr or "").strip() or "no output"
+        return {
+            "check_type": check_type,
+            "passed": False,
+            "result": None,
+            "error": f"external adapter returned empty output ({stderr_text})",
+        }
+    try:
+        decoded = json.loads(raw.splitlines()[-1])
+    except json.JSONDecodeError:
+        return {
+            "check_type": check_type,
+            "passed": False,
+            "result": None,
+            "error": f"invalid external adapter JSON output: {raw[:240]}",
+        }
+    if not isinstance(decoded, dict):
+        return {
+            "check_type": check_type,
+            "passed": False,
+            "result": None,
+            "error": "external adapter output must be a JSON object",
+        }
+    return {
+        "check_type": check_type,
+        "passed": bool(decoded.get("passed")),
+        "result": decoded.get("result"),
+        "error": decoded.get("error"),
+        "adapter": "external",
+    }
+
+
 def _sample_context(base: dict[str, Any], rng: random.Random) -> dict[str, Any]:
     sampled = dict(base)
     sampled["confidence_score"] = max(
@@ -349,6 +439,10 @@ def run_advanced_verification(
     simulation_min_pass_rate: float = 0.7,
     data_reference_path: str | None = None,
     simulation_seed: int = 42,
+    external_solver_cmd: str | None = None,
+    external_simulation_cmd: str | None = None,
+    external_data_cmd: str | None = None,
+    external_timeout_sec: int = 8,
 ) -> dict[str, object]:
     checks = _extract_advanced_checks(constraints, max_checks=max_checks)
     context = _verification_context(synthesis=synthesis, findings=findings)
@@ -358,27 +452,57 @@ def run_advanced_verification(
         kind = str(item.get("kind") or "").strip()
         payload = str(item.get("payload") or "").strip()
         if kind == "solver":
-            results.append(_run_solver_check(payload, context))
+            external = _run_external_adapter(
+                check_type="solver",
+                payload=payload,
+                synthesis=synthesis,
+                context=context,
+                command=external_solver_cmd,
+                timeout_sec=external_timeout_sec,
+            )
+            results.append(external if external is not None else _run_solver_check(payload, context))
             continue
         if kind == "simulation":
-            results.append(
-                _run_simulation_check(
-                    payload,
-                    context,
-                    default_trials=max(10, int(simulation_trials)),
-                    default_min_pass_rate=max(0.0, min(1.0, float(simulation_min_pass_rate))),
-                    seed=int(simulation_seed),
-                )
+            external = _run_external_adapter(
+                check_type="simulation",
+                payload=payload,
+                synthesis=synthesis,
+                context=context,
+                command=external_simulation_cmd,
+                timeout_sec=external_timeout_sec,
             )
+            if external is not None:
+                results.append(external)
+            else:
+                results.append(
+                    _run_simulation_check(
+                        payload,
+                        context,
+                        default_trials=max(10, int(simulation_trials)),
+                        default_min_pass_rate=max(0.0, min(1.0, float(simulation_min_pass_rate))),
+                        seed=int(simulation_seed),
+                    )
+                )
             continue
         if kind == "data_reference":
-            results.append(
-                _run_data_reference_check(
-                    payload,
-                    synthesis,
-                    default_data_path=data_reference_path,
-                )
+            external = _run_external_adapter(
+                check_type="data_reference",
+                payload=payload,
+                synthesis=synthesis,
+                context=context,
+                command=external_data_cmd,
+                timeout_sec=external_timeout_sec,
             )
+            if external is not None:
+                results.append(external)
+            else:
+                results.append(
+                    _run_data_reference_check(
+                        payload,
+                        synthesis,
+                        default_data_path=data_reference_path,
+                    )
+                )
             continue
 
     failed = [item for item in results if not bool(item.get("passed"))]

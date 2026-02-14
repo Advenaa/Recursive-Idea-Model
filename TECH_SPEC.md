@@ -160,6 +160,10 @@ Environment variables:
 52. `RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE` default `0.7` (minimum simulation pass-rate threshold)
 53. `RIM_ADV_VERIFY_SIMULATION_SEED` default `42` (deterministic simulation seed)
 54. `RIM_ADV_VERIFY_DATA_PATH` default `rim/eval/data/benchmark_ideas.jsonl` (local reference dataset path for `data:` checks)
+55. `RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC` default `8` (timeout for optional external advanced-verification adapters)
+56. `RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD` optional command (external backend for `solver:` checks)
+57. `RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD` optional command (external backend for `simulate:` checks)
+58. `RIM_ADV_VERIFY_EXTERNAL_DATA_CMD` optional command (external backend for `data:` checks)
 
 ## 5) Modes and Runtime Controls
 

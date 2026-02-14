@@ -358,6 +358,21 @@ class RimOrchestrator:
                 lower=0,
                 upper=2_000_000_000,
             )
+            advanced_verify_external_timeout_sec = _parse_int_env(
+                "RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC",
+                8,
+                lower=1,
+                upper=120,
+            )
+            advanced_verify_external_solver_cmd = os.getenv(
+                "RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD"
+            )
+            advanced_verify_external_simulation_cmd = os.getenv(
+                "RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD"
+            )
+            advanced_verify_external_data_cmd = os.getenv(
+                "RIM_ADV_VERIFY_EXTERNAL_DATA_CMD"
+            )
             enable_memory_folding = _parse_bool_env(
                 "RIM_ENABLE_MEMORY_FOLDING",
                 request.mode == "deep",
@@ -719,6 +734,10 @@ class RimOrchestrator:
                         simulation_min_pass_rate=advanced_verification_sim_min_pass_rate,
                         data_reference_path=advanced_verification_data_path,
                         simulation_seed=advanced_verification_seed,
+                        external_solver_cmd=advanced_verify_external_solver_cmd,
+                        external_simulation_cmd=advanced_verify_external_simulation_cmd,
+                        external_data_cmd=advanced_verify_external_data_cmd,
+                        external_timeout_sec=advanced_verify_external_timeout_sec,
                     )
                     self.repository.log_stage(
                         run_id=run_id,
@@ -730,6 +749,16 @@ class RimOrchestrator:
                             "simulation_min_pass_rate": advanced_verification_sim_min_pass_rate,
                             "data_reference_path": advanced_verification_data_path,
                             "simulation_seed": advanced_verification_seed,
+                            "external_timeout_sec": advanced_verify_external_timeout_sec,
+                            "external_solver_enabled": bool(
+                                str(advanced_verify_external_solver_cmd or "").strip()
+                            ),
+                            "external_simulation_enabled": bool(
+                                str(advanced_verify_external_simulation_cmd or "").strip()
+                            ),
+                            "external_data_enabled": bool(
+                                str(advanced_verify_external_data_cmd or "").strip()
+                            ),
                             **advanced_verification["summary"],
                         },
                     )

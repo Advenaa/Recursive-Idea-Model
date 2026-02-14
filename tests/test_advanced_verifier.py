@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from rim.agents.advanced_verifier import run_advanced_verification
@@ -88,3 +89,38 @@ def test_advanced_verifier_skips_when_no_prefixed_checks() -> None:
     )
     assert payload["summary"]["total_checks"] == 0
     assert payload["summary"]["skipped"] is True
+
+
+def test_advanced_verifier_can_use_external_solver_adapter(tmp_path: Path) -> None:
+    adapter = tmp_path / "external_solver.py"
+    adapter.write_text(
+        "\n".join(
+            [
+                "import json, sys",
+                "request = json.loads(sys.stdin.read() or '{}')",
+                "if request.get('check_type') != 'solver':",
+                "    print(json.dumps({'passed': False, 'error': 'unsupported'}))",
+                "    raise SystemExit(0)",
+                "print(json.dumps({'passed': True, 'result': {'backend': 'external-solver'}}))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    synthesis = {
+        "synthesized_idea": "Idea",
+        "changes_summary": [],
+        "residual_risks": [],
+        "next_experiments": [],
+        "confidence_score": 0.4,
+    }
+    payload = run_advanced_verification(
+        constraints=["solver: unknown_name > 0"],
+        synthesis=synthesis,
+        findings=[],
+        max_checks=3,
+        external_solver_cmd=f"{sys.executable} {adapter}",
+        external_timeout_sec=3,
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 0
+    assert payload["checks"][0]["adapter"] == "external"
