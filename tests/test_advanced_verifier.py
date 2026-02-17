@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import rim.agents.advanced_verifier as advanced_verifier_module
 from rim.agents.advanced_verifier import run_advanced_verification
 from rim.core.schemas import CriticFinding
 
@@ -163,3 +164,56 @@ def test_advanced_verifier_can_use_repo_adapter_for_multiple_check_types(tmp_pat
     assert payload["summary"]["total_checks"] == 3
     assert payload["summary"]["failed_checks"] == 0
     assert all(item.get("adapter") == "external" for item in payload["checks"])
+
+
+def test_advanced_verifier_runs_formal_solver_with_z3_or_fallback(
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    monkeypatch.delenv("RIM_ADV_VERIFY_FORMAL_ALLOW_AST_FALLBACK", raising=False)
+    synthesis = {
+        "synthesized_idea": "Idea",
+        "changes_summary": [],
+        "residual_risks": [],
+        "next_experiments": [],
+        "confidence_score": 0.8,
+    }
+    payload = run_advanced_verification(
+        constraints=["formal: confidence_score >= 0.75 and risk_count <= 1"],
+        synthesis=synthesis,
+        findings=[],
+        max_checks=3,
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 0
+    check = payload["checks"][0]
+    assert check["check_type"] == "formal_solver"
+    backend = ((check.get("result") or {}).get("backend") if isinstance(check.get("result"), dict) else None)
+    assert backend in {"z3", "ast_fallback"}
+
+
+def test_advanced_verifier_formal_solver_can_disable_ast_fallback(
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    monkeypatch.setenv("RIM_ADV_VERIFY_FORMAL_ALLOW_AST_FALLBACK", "0")
+    monkeypatch.setattr(
+        advanced_verifier_module,
+        "_safe_eval_z3",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("z3 backend unavailable")),  # noqa: ARG005
+    )
+    synthesis = {
+        "synthesized_idea": "Idea",
+        "changes_summary": [],
+        "residual_risks": [],
+        "next_experiments": [],
+        "confidence_score": 0.8,
+    }
+    payload = run_advanced_verification(
+        constraints=["formal: confidence_score >= 0.75"],
+        synthesis=synthesis,
+        findings=[],
+        max_checks=3,
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 1
+    assert payload["summary"]["execution_errors"] == 1
+    assert "z3 backend unavailable" in str(payload["checks"][0].get("error"))

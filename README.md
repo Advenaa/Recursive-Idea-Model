@@ -266,6 +266,10 @@ export RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE=0.7
 export RIM_ADV_VERIFY_SIMULATION_SEED=42
 export RIM_ADV_VERIFY_DATA_PATH=rim/eval/data/benchmark_ideas.jsonl
 export RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC=8
+# Built-in solver backend for `solver:` checks (`ast` or `z3`)
+export RIM_ADV_VERIFY_SOLVER_BACKEND=ast
+# `formal:` checks prefer z3 and can fall back to AST evaluation when enabled
+export RIM_ADV_VERIFY_FORMAL_ALLOW_AST_FALLBACK=1
 # Optional external adapters (stdin JSON in, stdout JSON out)
 export RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD="python scripts/advanced_verify_adapter.py"
 export RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD="python scripts/advanced_verify_adapter.py"
@@ -278,12 +282,14 @@ Verification constraint formats:
 
 - Prefix constraint with `python:` / `py:` / `assert:` to run a safe expression check.
 - Prefix constraint with `python_exec:` to run an explicit Python snippet in a timed subprocess.
-- Prefix constraint with `solver:` to run deterministic symbolic assertions.
+- Prefix constraint with `solver:` to run deterministic symbolic assertions (`RIM_ADV_VERIFY_SOLVER_BACKEND=ast|z3`).
+- Prefix constraint with `formal:` / `theorem:` / `constraint:` to force formal solver checks (z3-first with optional AST fallback).
 - Prefix constraint with `simulate:` for Monte Carlo robustness checks (`| trials=200 | min_pass_rate=0.7` supported).
 - Prefix constraint with `data:` for data-reference checks (`| path=... | min_overlap=... | mode=all|fraction` supported).
 - Available variables in expressions: `confidence_score`, `change_count`, `risk_count`, `experiment_count`, `finding_count`, `high_finding_count`, `critical_finding_count`.
 - Example: `python: confidence_score >= 0.7 and risk_count <= 2`
 - Example: `solver: confidence_score >= 0.75 and risk_count <= 2`
+- Example: `formal: confidence_score >= 0.75 and risk_count <= 2`
 - Example: `simulate: confidence_score >= 0.65 | trials=300 | min_pass_rate=0.75`
 - Example: `data: compliance, audit | path=rim/eval/data/benchmark_ideas.jsonl | min_overlap=0.5`
 - `python_exec:` snippets receive `context` and should set `passed = True|False` (optional `detail` string).
