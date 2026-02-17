@@ -285,6 +285,8 @@ export RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC=8
 export RIM_ADV_VERIFY_ALLOW_HTTP_DATA=0
 export RIM_ADV_VERIFY_HTTP_TIMEOUT_SEC=5
 export RIM_ADV_VERIFY_HTTP_MAX_BYTES=300000
+# Optional comma-separated host allowlist for HTTP `data:` references
+export RIM_ADV_VERIFY_HTTP_ALLOWED_HOSTS="example.com,docs.example.com"
 # Built-in solver backend for `solver:` checks (`ast` or `z3`)
 export RIM_ADV_VERIFY_SOLVER_BACKEND=ast
 # `formal:` checks prefer z3 and can fall back to AST evaluation when enabled
@@ -309,7 +311,7 @@ Verification constraint formats:
   - Supports assumptions via `| assume=expr_a;expr_b`.
 - Prefix constraint with `simulate:` for Monte Carlo robustness checks (`| trials=200 | min_pass_rate=0.7` supported).
 - Prefix constraint with `data:` for data-reference checks (`| path=... | min_overlap=... | mode=all|fraction` supported).
-  - Optional HTTP source: `| url=https://...` (requires `RIM_ADV_VERIFY_ALLOW_HTTP_DATA=1`).
+  - Optional HTTP source: `| url=https://...` (requires `RIM_ADV_VERIFY_ALLOW_HTTP_DATA=1`; optional host allowlist via `RIM_ADV_VERIFY_HTTP_ALLOWED_HOSTS`).
 - Available variables in expressions: `confidence_score`, `change_count`, `risk_count`, `experiment_count`, `finding_count`, `high_finding_count`, `critical_finding_count`.
 - Example: `python: confidence_score >= 0.7 and risk_count <= 2`
 - Example: `solver: confidence_score >= 0.75 and risk_count <= 2`

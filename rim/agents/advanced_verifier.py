@@ -10,6 +10,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from rim.core.schemas import CriticFinding
@@ -793,6 +794,57 @@ def _is_http_url(value: str | None) -> bool:
     return text.startswith("https://") or text.startswith("http://")
 
 
+def _http_host(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if "://" not in normalized:
+        normalized = f"https://{normalized}"
+    try:
+        parsed = urlparse(normalized)
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(parsed.hostname or "").strip().lower().rstrip(".")
+
+
+def _normalize_http_allowlist(value: object) -> list[str]:
+    if value is None:
+        return []
+    raw_items: list[object]
+    if isinstance(value, str):
+        raw_items = [item for item in str(value).split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        host = _http_host(item)
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        normalized.append(host)
+    return normalized
+
+
+def _is_allowed_http_source(source_url: str, allowed_hosts: list[str]) -> bool:
+    if not allowed_hosts:
+        return True
+    host = _http_host(source_url)
+    if not host:
+        return False
+    for allowed in allowed_hosts:
+        normalized_allowed = _http_host(allowed)
+        if not normalized_allowed:
+            continue
+        if host == normalized_allowed:
+            return True
+        if host.endswith(f".{normalized_allowed}"):
+            return True
+    return False
+
+
 def _fetch_http_text(
     *,
     source_url: str,
@@ -830,6 +882,7 @@ def _run_data_reference_check(
     allow_http: bool = False,
     http_timeout_sec: int = 5,
     http_max_bytes: int = 300_000,
+    http_allowed_hosts: list[str] | None = None,
 ) -> dict[str, object]:
     terms_segment, options = _split_payload(payload)
     terms = [str(item).strip().lower() for item in terms_segment.split(",") if str(item).strip()]
@@ -853,6 +906,7 @@ def _run_data_reference_check(
     corpus_text = ""
     source_kind = "path"
     source_value = ""
+    allowed_hosts = _normalize_http_allowlist(http_allowed_hosts)
     if source_url:
         if not allow_http:
             return {
@@ -861,6 +915,17 @@ def _run_data_reference_check(
                 "passed": False,
                 "result": None,
                 "error": "HTTP data references are disabled (set allow_http_data_reference).",
+            }
+        if allowed_hosts and not _is_allowed_http_source(source_url, allowed_hosts):
+            return {
+                "check_type": "data_reference",
+                "terms": terms,
+                "passed": False,
+                "result": None,
+                "error": (
+                    f"HTTP data reference host '{_http_host(source_url) or source_url}' "
+                    "is not in the allowed host list."
+                ),
             }
         corpus_text, fetch_error = _fetch_http_text(
             source_url=source_url,
@@ -946,6 +1011,7 @@ def run_advanced_verification(
     allow_http_data_reference: bool = False,
     http_data_timeout_sec: int = 5,
     http_data_max_bytes: int = 300_000,
+    http_data_allowed_hosts: list[str] | None = None,
 ) -> dict[str, object]:
     checks = _extract_advanced_checks(constraints, max_checks=max_checks)
     context = _verification_context(synthesis=synthesis, findings=findings)
@@ -1030,6 +1096,7 @@ def run_advanced_verification(
                         allow_http=allow_http_data_reference,
                         http_timeout_sec=http_data_timeout_sec,
                         http_max_bytes=http_data_max_bytes,
+                        http_allowed_hosts=http_data_allowed_hosts,
                     )
                 )
             continue

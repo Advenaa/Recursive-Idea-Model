@@ -168,6 +168,20 @@ def _parse_float_env(
     return max(lower, min(upper, value))
 
 
+def _parse_csv_env(name: str, default: list[str] | None = None) -> list[str]:
+    raw = os.getenv(name)
+    source = list(default or []) if raw is None else str(raw).split(",")
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for item in source:
+        token = str(item or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        parsed.append(token)
+    return parsed
+
+
 def _coerce_bool(value: object, default: bool) -> bool:
     if value is None:
         return bool(default)
@@ -583,6 +597,10 @@ class RimExecutionEngine:
                 300_000,
                 lower=1_024,
                 upper=5_000_000,
+            )
+            advanced_verify_http_allowed_hosts = _parse_csv_env(
+                "RIM_ADV_VERIFY_HTTP_ALLOWED_HOSTS",
+                default=[],
             )
             memory_policy_path = str(os.getenv("RIM_MEMORY_POLICY_PATH", "")).strip()
             memory_policy_env: dict[str, object] = {}
@@ -1430,6 +1448,7 @@ class RimExecutionEngine:
                         allow_http_data_reference=advanced_verify_allow_http_data,
                         http_data_timeout_sec=advanced_verify_http_timeout_sec,
                         http_data_max_bytes=advanced_verify_http_max_bytes,
+                        http_data_allowed_hosts=advanced_verify_http_allowed_hosts,
                     )
                     self.repository.log_stage(
                         run_id=run_id,
@@ -1454,6 +1473,7 @@ class RimExecutionEngine:
                             "http_data_enabled": advanced_verify_allow_http_data,
                             "http_data_timeout_sec": advanced_verify_http_timeout_sec,
                             "http_data_max_bytes": advanced_verify_http_max_bytes,
+                            "http_data_allowed_hosts": advanced_verify_http_allowed_hosts,
                             **advanced_verification["summary"],
                         },
                     )

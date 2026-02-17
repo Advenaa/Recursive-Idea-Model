@@ -114,7 +114,7 @@ def test_advanced_verifier_supports_http_data_reference_via_url_option(
     }
     payload = run_advanced_verification(
         constraints=[
-            "data: compliance,audit | url=https://example.com/reference.txt | min_overlap=0.5",
+            "data: compliance,audit | url=https://docs.example.com/reference.txt | min_overlap=0.5",
         ],
         synthesis=synthesis,
         findings=[],
@@ -122,13 +122,14 @@ def test_advanced_verifier_supports_http_data_reference_via_url_option(
         allow_http_data_reference=True,
         http_data_timeout_sec=2,
         http_data_max_bytes=4096,
+        http_data_allowed_hosts=["example.com"],
     )
     assert payload["summary"]["total_checks"] == 1
     assert payload["summary"]["failed_checks"] == 0
     check = payload["checks"][0]
     assert check["check_type"] == "data_reference"
     assert check["result"]["source_kind"] == "url"
-    assert check["result"]["source"] == "https://example.com/reference.txt"
+    assert check["result"]["source"] == "https://docs.example.com/reference.txt"
 
 
 def test_advanced_verifier_rejects_http_data_reference_when_disabled() -> None:
@@ -150,6 +151,41 @@ def test_advanced_verifier_rejects_http_data_reference_when_disabled() -> None:
     assert payload["summary"]["total_checks"] == 1
     assert payload["summary"]["failed_checks"] == 1
     assert "disabled" in str(payload["checks"][0].get("error")).lower()
+
+
+def test_advanced_verifier_rejects_http_data_reference_when_host_not_allowed(
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    called = {"value": False}
+
+    def fake_urlopen(request, timeout=0):  # noqa: ANN001, ANN202
+        _ = request
+        _ = timeout
+        called["value"] = True
+        raise AssertionError("urlopen should not be called when host is not allowed")
+
+    monkeypatch.setattr(advanced_verifier_module, "urlopen", fake_urlopen)
+    synthesis = {
+        "synthesized_idea": "Include compliance audit controls.",
+        "changes_summary": [],
+        "residual_risks": [],
+        "next_experiments": [],
+        "confidence_score": 0.8,
+    }
+    payload = run_advanced_verification(
+        constraints=[
+            "data: compliance,audit | url=https://example.com/reference.txt | min_overlap=0.5",
+        ],
+        synthesis=synthesis,
+        findings=[],
+        max_checks=3,
+        allow_http_data_reference=True,
+        http_data_allowed_hosts=["docs.example.com"],
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 1
+    assert "allowed host list" in str(payload["checks"][0].get("error")).lower()
+    assert called["value"] is False
 
 
 def test_advanced_verifier_skips_when_no_prefixed_checks() -> None:
