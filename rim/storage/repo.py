@@ -621,3 +621,169 @@ class RunRepository:
         telemetry["avg_novelty_ratio"] = round(novelty_total / float(fold_count), 4)
         telemetry["avg_duplicate_ratio"] = round(duplicate_total / float(fold_count), 4)
         return telemetry
+
+    def get_recent_specialist_contract_telemetry(self, lookback_runs: int = 24) -> dict:
+        limit = max(1, min(int(lookback_runs), 500))
+        run_rows = self.conn.execute(
+            """
+            SELECT id, confidence_score
+            FROM runs
+            WHERE status IN ('completed', 'partial')
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        run_ids = [str(row["id"]) for row in run_rows]
+        run_confidence_by_id = {
+            str(row["id"]): _parse_float(row["confidence_score"], 0.0)
+            for row in run_rows
+        }
+        telemetry = {
+            "lookback_runs": limit,
+            "run_count": len(run_ids),
+            "arbitration_count": 0,
+            "specialist_round_count": 0,
+            "role_stats": {},
+        }
+        if not run_ids:
+            return telemetry
+
+        placeholders = ",".join("?" for _ in run_ids)
+        log_rows = self.conn.execute(
+            f"""
+            SELECT run_id, meta_json
+            FROM stage_logs
+            WHERE stage = 'challenge_arbitration'
+              AND status = 'completed'
+              AND run_id IN ({placeholders})
+            """,
+            run_ids,
+        ).fetchall()
+        if not log_rows:
+            return telemetry
+
+        role_counts: dict[str, int] = {}
+        role_merge_counts: dict[str, int] = {}
+        role_escalate_counts: dict[str, int] = {}
+        role_drop_counts: dict[str, int] = {}
+        role_match_totals: dict[str, float] = {}
+        role_match_counts: dict[str, int] = {}
+        role_confidence_totals: dict[str, float] = {}
+        role_confidence_counts: dict[str, int] = {}
+        specialist_round_count = 0
+        arbitration_count = 0
+
+        for row in log_rows:
+            meta_raw = str(row["meta_json"] or "{}")
+            try:
+                meta = json.loads(meta_raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(meta, dict):
+                continue
+            arbitration_count += 1
+            run_id = str(row["run_id"])
+            run_confidence = _parse_float(run_confidence_by_id.get(run_id), 0.0)
+
+            role_action_counts = meta.get("specialist_role_action_counts")
+            role_avg_match_scores = meta.get("specialist_role_avg_match_score")
+            selected_roles = meta.get("specialist_selected_roles")
+            if not isinstance(selected_roles, list) or not selected_roles:
+                fallback_roles = meta.get("specialist_contract_roles")
+                if isinstance(fallback_roles, list):
+                    selected_roles = fallback_roles
+                else:
+                    selected_roles = []
+
+            normalized_roles: list[str] = []
+            for raw_role in selected_roles:
+                role = str(raw_role or "").strip().lower()
+                if role:
+                    normalized_roles.append(role)
+            specialist_round_count += len(normalized_roles)
+
+            total_role_rounds = 0
+            if isinstance(role_action_counts, dict):
+                for raw_role, raw_counts in role_action_counts.items():
+                    role = str(raw_role or "").strip().lower()
+                    if not role or not isinstance(raw_counts, dict):
+                        continue
+                    merge_count = max(0, int(_parse_float(raw_counts.get("merge"), 0.0)))
+                    escalate_count = max(0, int(_parse_float(raw_counts.get("escalate"), 0.0)))
+                    drop_count = max(0, int(_parse_float(raw_counts.get("drop"), 0.0)))
+                    total = merge_count + escalate_count + drop_count
+                    if total <= 0:
+                        total = max(0, int(_parse_float(raw_counts.get("total"), 0.0)))
+                    if total <= 0:
+                        continue
+                    total_role_rounds += total
+                    role_counts[role] = role_counts.get(role, 0) + total
+                    role_merge_counts[role] = role_merge_counts.get(role, 0) + merge_count
+                    role_escalate_counts[role] = role_escalate_counts.get(role, 0) + escalate_count
+                    role_drop_counts[role] = role_drop_counts.get(role, 0) + drop_count
+                    role_confidence_totals[role] = role_confidence_totals.get(role, 0.0) + (
+                        run_confidence * float(total)
+                    )
+                    role_confidence_counts[role] = role_confidence_counts.get(role, 0) + total
+            else:
+                fallback_action = str(meta.get("specialist_top_action") or "merge").strip().lower()
+                if fallback_action not in {"merge", "escalate", "drop"}:
+                    fallback_action = "merge"
+                for role in normalized_roles:
+                    role_counts[role] = role_counts.get(role, 0) + 1
+                    if fallback_action == "merge":
+                        role_merge_counts[role] = role_merge_counts.get(role, 0) + 1
+                    elif fallback_action == "escalate":
+                        role_escalate_counts[role] = role_escalate_counts.get(role, 0) + 1
+                    else:
+                        role_drop_counts[role] = role_drop_counts.get(role, 0) + 1
+                    role_confidence_totals[role] = role_confidence_totals.get(role, 0.0) + run_confidence
+                    role_confidence_counts[role] = role_confidence_counts.get(role, 0) + 1
+
+            if not normalized_roles and total_role_rounds > 0:
+                specialist_round_count += total_role_rounds
+
+            if isinstance(role_avg_match_scores, dict):
+                for raw_role, raw_score in role_avg_match_scores.items():
+                    role = str(raw_role or "").strip().lower()
+                    if not role:
+                        continue
+                    role_match_totals[role] = role_match_totals.get(role, 0.0) + _parse_float(
+                        raw_score,
+                        0.0,
+                    )
+                    role_match_counts[role] = role_match_counts.get(role, 0) + 1
+
+        role_stats: dict[str, dict[str, float | int]] = {}
+        for role, selected_count in sorted(role_counts.items()):
+            if selected_count <= 0:
+                continue
+            merge_count = role_merge_counts.get(role, 0)
+            escalate_count = role_escalate_counts.get(role, 0)
+            drop_count = role_drop_counts.get(role, 0)
+            avg_match_score = (
+                role_match_totals.get(role, 0.0) / float(role_match_counts.get(role, 0))
+                if role_match_counts.get(role, 0) > 0
+                else 0.0
+            )
+            avg_run_conf = (
+                role_confidence_totals.get(role, 0.0) / float(role_confidence_counts.get(role, 0))
+                if role_confidence_counts.get(role, 0) > 0
+                else 0.0
+            )
+            role_stats[role] = {
+                "selected_count": selected_count,
+                "merge_count": merge_count,
+                "escalate_count": escalate_count,
+                "drop_count": drop_count,
+                "merge_rate": round(float(merge_count) / float(selected_count), 4),
+                "escalate_rate": round(float(escalate_count) / float(selected_count), 4),
+                "avg_match_score": round(avg_match_score, 4),
+                "avg_run_confidence": round(avg_run_conf, 4),
+            }
+
+        telemetry["arbitration_count"] = arbitration_count
+        telemetry["specialist_round_count"] = specialist_round_count
+        telemetry["role_stats"] = role_stats
+        return telemetry

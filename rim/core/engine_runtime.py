@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import time
@@ -19,6 +20,7 @@ from rim.core.depth_allocator import decide_next_cycle, severity_counts
 from rim.core.memory_folding import fold_cycle_memory, fold_to_memory_entries
 from rim.core.memory_quality import adapt_memory_fold_policy
 from rim.core.modes import get_mode_settings
+from rim.core.specialist_contract_quality import derive_specialist_role_boost_adjustments
 from rim.core.schemas import (
     AnalyzeRequest,
     AnalyzeResult,
@@ -300,6 +302,17 @@ def _load_memory_policy_env(path_value: str) -> tuple[dict[str, object], str | N
     if not filtered:
         return {}, "No memory-fold keys found in policy file."
     return filtered, None
+
+
+def _callable_accepts_keyword(function: Callable[..., Any], name: str) -> bool:
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return False
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+    return name in signature.parameters
 
 
 def _next_cycle_memory_context(
@@ -765,6 +778,58 @@ class RimExecutionEngine:
                 lower=0.0,
                 upper=1.0,
             )
+            specialist_contract_controller_enabled = _parse_bool_env(
+                "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER",
+                request.mode == "deep",
+            )
+            specialist_contract_lookback_runs = _parse_int_env(
+                "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS",
+                24,
+                lower=1,
+                upper=500,
+            )
+            specialist_contract_min_rounds = _parse_int_env(
+                "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS",
+                4,
+                lower=1,
+                upper=200,
+            )
+            specialist_contract_min_role_samples = _parse_int_env(
+                "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES",
+                2,
+                lower=1,
+                upper=50,
+            )
+            specialist_contract_telemetry = {
+                "lookback_runs": specialist_contract_lookback_runs,
+                "run_count": 0,
+                "arbitration_count": 0,
+                "specialist_round_count": 0,
+                "role_stats": {},
+            }
+            specialist_contract_adjustment = {
+                "applied": False,
+                "reason": "controller_disabled",
+                "specialist_round_count": 0,
+                "min_rounds": specialist_contract_min_rounds,
+                "min_role_samples": specialist_contract_min_role_samples,
+                "quality_pressure": 0.0,
+                "roles_considered": 0,
+                "roles_adjusted": [],
+            }
+            adaptive_specialist_role_boosts: dict[str, float] = {}
+            if specialist_contract_controller_enabled:
+                specialist_contract_telemetry = self.repository.get_recent_specialist_contract_telemetry(
+                    lookback_runs=specialist_contract_lookback_runs,
+                )
+                (
+                    adaptive_specialist_role_boosts,
+                    specialist_contract_adjustment,
+                ) = derive_specialist_role_boost_adjustments(
+                    telemetry=specialist_contract_telemetry,
+                    min_rounds=specialist_contract_min_rounds,
+                    min_role_samples=specialist_contract_min_role_samples,
+                )
             self.repository.mark_run_status(run_id=run_id, status="running")
             self.repository.log_stage(
                 run_id=run_id,
@@ -814,6 +879,37 @@ class RimExecutionEngine:
                     "specialist_policy_applied": bool(specialist_policy_env),
                     "specialist_policy_path": specialist_policy_path or None,
                     "specialist_policy_error": specialist_policy_error,
+                    "specialist_contract_controller_enabled": specialist_contract_controller_enabled,
+                    "specialist_contract_controller_applied": bool(
+                        specialist_contract_adjustment.get("applied", False)
+                    ),
+                    "specialist_contract_controller_reason": specialist_contract_adjustment.get(
+                        "reason"
+                    ),
+                    "specialist_contract_controller_quality_pressure": (
+                        specialist_contract_adjustment.get("quality_pressure", 0.0)
+                    ),
+                    "specialist_contract_lookback_runs": specialist_contract_lookback_runs,
+                    "specialist_contract_min_rounds": specialist_contract_min_rounds,
+                    "specialist_contract_min_role_samples": (
+                        specialist_contract_min_role_samples
+                    ),
+                    "specialist_contract_run_count": specialist_contract_telemetry.get(
+                        "run_count",
+                        0,
+                    ),
+                    "specialist_contract_arbitration_count": (
+                        specialist_contract_telemetry.get("arbitration_count", 0)
+                    ),
+                    "specialist_contract_round_count": specialist_contract_telemetry.get(
+                        "specialist_round_count",
+                        0,
+                    ),
+                    "specialist_contract_roles_adjusted": specialist_contract_adjustment.get(
+                        "roles_adjusted",
+                        [],
+                    ),
+                    "specialist_contract_role_boost_adjustments": adaptive_specialist_role_boosts,
                 },
             )
             memory_context = self.repository.get_memory_context(
@@ -833,12 +929,17 @@ class RimExecutionEngine:
                     "min_severity": memory_min_severity,
                 },
             )
-            spawn_plan = self.agents.build_spawn_plan(
-                mode=request.mode,
-                domain=request.domain,
-                constraints=request.constraints,
-                memory_context=memory_context,
-            )
+            spawn_kwargs: dict[str, Any] = {
+                "mode": request.mode,
+                "domain": request.domain,
+                "constraints": request.constraints,
+                "memory_context": memory_context,
+            }
+            if _callable_accepts_keyword(self.agents.build_spawn_plan, "adaptive_role_boosts"):
+                spawn_kwargs["adaptive_role_boosts"] = adaptive_specialist_role_boosts
+            if _callable_accepts_keyword(self.agents.build_spawn_plan, "adaptive_meta"):
+                spawn_kwargs["adaptive_meta"] = specialist_contract_adjustment
+            spawn_plan = self.agents.build_spawn_plan(**spawn_kwargs)
             spawned_specialist_contracts = [
                 item
                 for item in list(spawn_plan.get("extra_critics") or [])
@@ -955,21 +1056,28 @@ class RimExecutionEngine:
                 if enable_arbitration and reconciliation["summary"]["disagreement_count"] > 0:
                     arbitration_started = time.perf_counter()
                     try:
-                        arbitrations, arbitration_providers = await self.agents.run_arbitration(
-                            provider_session,
-                            reconciliation=reconciliation,
-                            findings=findings,
-                            max_jobs=arbitration_max_jobs,
-                            devils_advocate_rounds=(
+                        arbitration_kwargs: dict[str, Any] = {
+                            "reconciliation": reconciliation,
+                            "findings": findings,
+                            "max_jobs": arbitration_max_jobs,
+                            "devils_advocate_rounds": (
                                 devils_advocate_rounds
                                 if enable_devils_advocate_arbitration
                                 else 0
                             ),
-                            devils_advocate_min_confidence=devils_advocate_min_confidence,
-                            specialist_loop_enabled=enable_specialist_arbitration_loop,
-                            specialist_max_jobs=specialist_arbitration_max_jobs,
-                            specialist_min_confidence=specialist_arbitration_min_confidence,
-                            specialist_contracts=spawned_specialist_contracts,
+                            "devils_advocate_min_confidence": devils_advocate_min_confidence,
+                            "specialist_loop_enabled": enable_specialist_arbitration_loop,
+                            "specialist_max_jobs": specialist_arbitration_max_jobs,
+                            "specialist_min_confidence": specialist_arbitration_min_confidence,
+                        }
+                        if _callable_accepts_keyword(
+                            self.agents.run_arbitration,
+                            "specialist_contracts",
+                        ):
+                            arbitration_kwargs["specialist_contracts"] = spawned_specialist_contracts
+                        arbitrations, arbitration_providers = await self.agents.run_arbitration(
+                            provider_session,
+                            **arbitration_kwargs,
                         )
                         devils_advocate_count = len(
                             [
@@ -985,6 +1093,58 @@ class RimExecutionEngine:
                                 if str(item.get("round", "")) == "specialist"
                             ]
                         )
+                        specialist_rounds = [
+                            item
+                            for item in arbitrations
+                            if str(item.get("round", "")) == "specialist"
+                        ]
+                        specialist_action_counts: dict[str, int] = {
+                            "merge": 0,
+                            "escalate": 0,
+                            "drop": 0,
+                        }
+                        specialist_role_action_counts: dict[str, dict[str, int]] = {}
+                        specialist_role_match_sums: dict[str, float] = {}
+                        specialist_role_match_counts: dict[str, int] = {}
+                        specialist_selected_roles_live: list[str] = []
+                        for item in specialist_rounds:
+                            action = str(item.get("action", "")).strip().lower()
+                            if action not in specialist_action_counts:
+                                action = "merge"
+                            specialist_action_counts[action] += 1
+                            role = str(item.get("specialist_role") or "specialist").strip().lower()
+                            if not role:
+                                role = "specialist"
+                            specialist_selected_roles_live.append(role)
+                            role_bucket = specialist_role_action_counts.setdefault(
+                                role,
+                                {"merge": 0, "escalate": 0, "drop": 0, "total": 0},
+                            )
+                            role_bucket[action] += 1
+                            role_bucket["total"] += 1
+                            try:
+                                match_score = float(item.get("specialist_match_score", 0.0))
+                            except (TypeError, ValueError):
+                                match_score = 0.0
+                            specialist_role_match_sums[role] = (
+                                specialist_role_match_sums.get(role, 0.0) + match_score
+                            )
+                            specialist_role_match_counts[role] = (
+                                specialist_role_match_counts.get(role, 0) + 1
+                            )
+                        specialist_role_avg_match_score = {
+                            role: round(
+                                specialist_role_match_sums[role]
+                                / float(specialist_role_match_counts[role]),
+                                4,
+                            )
+                            for role in sorted(specialist_role_match_sums)
+                            if specialist_role_match_counts.get(role, 0) > 0
+                        }
+                        specialist_top_action = max(
+                            specialist_action_counts.items(),
+                            key=lambda item: item[1],
+                        )[0]
                         self.repository.log_stage(
                             run_id=run_id,
                             stage="challenge_arbitration",
@@ -1017,6 +1177,11 @@ class RimExecutionEngine:
                                 "specialist_count": specialist_count,
                                 "specialist_contract_count": len(spawned_specialist_contracts),
                                 "specialist_contract_roles": spawned_specialist_roles,
+                                "specialist_selected_roles": specialist_selected_roles_live,
+                                "specialist_action_counts": specialist_action_counts,
+                                "specialist_top_action": specialist_top_action,
+                                "specialist_role_action_counts": specialist_role_action_counts,
+                                "specialist_role_avg_match_score": specialist_role_avg_match_score,
                                 "specialist_policy_applied": bool(specialist_policy_env),
                                 "specialist_policy_path": specialist_policy_path or None,
                                 "specialist_policy_error": specialist_policy_error,

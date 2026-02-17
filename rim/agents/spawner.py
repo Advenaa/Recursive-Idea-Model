@@ -375,6 +375,8 @@ def build_spawn_plan(
     domain: str | None,
     constraints: list[str] | None,
     memory_context: list[str] | None = None,
+    adaptive_role_boosts: dict[str, float] | None = None,
+    adaptive_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     domain_counts = _token_counts(str(domain or ""))
     constraint_counts = _token_counts(" ".join(str(item) for item in list(constraints or [])))
@@ -475,6 +477,20 @@ def build_spawn_plan(
         "RIM_SPAWN_ROLE_TOOL_OVERRIDES",
         role_tool_overrides_default,
     )
+    adaptive_role_boosts_map = _coerce_float_map(
+        adaptive_role_boosts or {},
+        lower=-4.0,
+        upper=4.0,
+    )
+    role_boosts_effective = dict(role_boosts)
+    for role_name, delta in adaptive_role_boosts_map.items():
+        role_boosts_effective[role_name] = round(
+            max(
+                -4.0,
+                min(4.0, float(role_boosts_effective.get(role_name, 0.0)) + float(delta)),
+            ),
+            4,
+        )
     scored_candidates: list[dict[str, Any]] = []
     known_keywords = {
         keyword
@@ -482,7 +498,7 @@ def build_spawn_plan(
         for keyword in keywords
     }
     for role_name, keywords, stage, critic_type in _ROLE_RULES:
-        score_boost = float(role_boosts.get(role_name, 0.0))
+        score_boost = float(role_boosts_effective.get(role_name, 0.0))
         score, matched_keywords, evidence = _role_score(
             role_name=role_name,
             keywords=keywords,
@@ -595,7 +611,11 @@ def build_spawn_plan(
         "max_dynamic_specialists": max_dynamic_specialists,
         "domain_hint_role": hint_role,
         "dynamic_enabled": enable_dynamic_specialists,
-        "role_boosts": role_boosts,
+        "role_boosts": role_boosts_effective,
+        "base_role_boosts": role_boosts,
+        "adaptive_role_boosts": adaptive_role_boosts_map,
+        "adaptive_boosts_applied": bool(adaptive_role_boosts_map),
+        "adaptive_meta": dict(adaptive_meta or {}),
         "dynamic_token_boosts": dynamic_token_boosts,
         "role_routing_overrides": role_routing_overrides,
         "role_tool_overrides": role_tool_overrides,

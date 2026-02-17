@@ -161,6 +161,74 @@ def test_recent_memory_fold_telemetry_aggregates_metrics(tmp_path: Path) -> None
     assert telemetry["avg_duplicate_ratio"] == 0.4
 
 
+def test_recent_specialist_contract_telemetry_aggregates_role_metrics(tmp_path: Path) -> None:
+    db_path = tmp_path / "rim_test.db"
+    repo = RunRepository(db_path=db_path)
+    repo.create_run_with_request(
+        run_id="run-specialist-1",
+        mode="deep",
+        input_idea="idea-specialist-1",
+        request_json='{"idea":"idea-specialist-1","mode":"deep"}',
+        status="completed",
+    )
+    repo.create_run_with_request(
+        run_id="run-specialist-2",
+        mode="deep",
+        input_idea="idea-specialist-2",
+        request_json='{"idea":"idea-specialist-2","mode":"deep"}',
+        status="completed",
+    )
+    repo.mark_run_status(
+        run_id="run-specialist-1",
+        status="completed",
+        confidence_score=0.9,
+    )
+    repo.mark_run_status(
+        run_id="run-specialist-2",
+        status="completed",
+        confidence_score=0.5,
+    )
+    repo.log_stage(
+        run_id="run-specialist-1",
+        stage="challenge_arbitration",
+        status="completed",
+        meta={
+            "specialist_selected_roles": ["security", "security"],
+            "specialist_role_action_counts": {
+                "security": {"merge": 2, "escalate": 0, "drop": 0, "total": 2}
+            },
+            "specialist_role_avg_match_score": {"security": 1.8},
+        },
+    )
+    repo.log_stage(
+        run_id="run-specialist-2",
+        stage="challenge_arbitration",
+        status="completed",
+        meta={
+            "specialist_selected_roles": ["security", "finance"],
+            "specialist_role_action_counts": {
+                "security": {"merge": 0, "escalate": 1, "drop": 0, "total": 1},
+                "finance": {"merge": 1, "escalate": 0, "drop": 0, "total": 1},
+            },
+            "specialist_role_avg_match_score": {"security": 0.6, "finance": 1.2},
+        },
+    )
+
+    telemetry = repo.get_recent_specialist_contract_telemetry(lookback_runs=10)
+    assert telemetry["run_count"] == 2
+    assert telemetry["arbitration_count"] == 2
+    assert telemetry["specialist_round_count"] == 4
+    role_stats = telemetry["role_stats"]
+    assert role_stats["security"]["selected_count"] == 3
+    assert role_stats["security"]["merge_count"] == 2
+    assert role_stats["security"]["escalate_count"] == 1
+    assert role_stats["security"]["merge_rate"] == 0.6667
+    assert role_stats["security"]["avg_match_score"] == 1.2
+    assert role_stats["security"]["avg_run_confidence"] == 0.7667
+    assert role_stats["finance"]["selected_count"] == 1
+    assert role_stats["finance"]["merge_rate"] == 1.0
+
+
 def test_pending_runs_and_request_roundtrip(tmp_path: Path) -> None:
     db_path = tmp_path / "rim_test.db"
     repo = RunRepository(db_path=db_path)

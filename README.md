@@ -35,6 +35,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - Multi-round disagreement arbitration with devil's-advocate + contract-aware specialist follow-up loops (`rim/agents/arbitrator.py`)
 - Advanced verification adapters (`solver:`, `simulate:`, `data:`) (`rim/agents/advanced_verifier.py`)
 - Scored specialist spawning with tool-routing contracts (`rim/agents/spawner.py`)
+- Telemetry-driven specialist contract controller that auto-adjusts spawn role boosts from recent specialist arbitration outcomes (`rim/core/specialist_contract_quality.py`)
 - Persistent API job queue (resume queued/running jobs on restart) (`rim/api/job_queue.py`)
 - Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
 - SQLite persistence + memory context reuse (`rim/storage/`)
@@ -244,6 +245,11 @@ export RIM_SPECIALIST_ARBITRATION_MAX_JOBS=2
 export RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE=0.78
 # Optional trained specialist policy file from `rim eval train-specialist-policy` output
 export RIM_SPECIALIST_POLICY_PATH=rim/eval/policies/specialist_policy.json
+# Runtime specialist contract controller (auto-adjust spawn role boosts from recent specialist arbitration telemetry)
+export RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER=1
+export RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS=24
+export RIM_SPECIALIST_CONTRACT_MIN_ROUNDS=4
+export RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES=2
 export RIM_SPAWN_MIN_ROLE_SCORE=1.0
 export RIM_SPAWN_MAX_SPECIALISTS_DEEP=3
 export RIM_SPAWN_MAX_SPECIALISTS_FAST=1

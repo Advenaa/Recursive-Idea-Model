@@ -197,3 +197,21 @@ def test_spawn_plan_env_json_maps_override_policy_maps(tmp_path, monkeypatch) ->
     roles = [item["role"] for item in payload["extra_critics"]]
     assert "finance" in roles
     assert payload["role_boosts"] == {"finance": 3.0}
+
+
+def test_spawn_plan_applies_adaptive_role_boost_adjustments() -> None:
+    payload = build_spawn_plan(
+        mode="deep",
+        domain="general",
+        constraints=["light requirement"],
+        memory_context=[],
+        adaptive_role_boosts={"finance": 1.4},
+        adaptive_meta={"reason": "specialist_role_boost_adjustment"},
+    )
+    roles = [item["role"] for item in payload["extra_critics"]]
+    assert "finance" in roles
+    assert payload["base_role_boosts"] == {}
+    assert payload["adaptive_role_boosts"] == {"finance": 1.4}
+    assert payload["role_boosts"]["finance"] == 1.4
+    assert payload["adaptive_boosts_applied"] is True
+    assert payload["adaptive_meta"]["reason"] == "specialist_role_boost_adjustment"
