@@ -8,6 +8,7 @@ from pathlib import Path
 from rim.api.job_queue import RunJobQueue
 from rim.core.orchestrator import RimOrchestrator
 from rim.core.schemas import AnalyzeRequest
+from rim.engine import build_orchestrator as build_embedded_orchestrator
 from rim.eval.runner import (
     DEFAULT_DATASET_PATH,
     DEFAULT_REPORTS_DIR,
@@ -37,8 +38,15 @@ from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
 
 
-def _build_orchestrator() -> RimOrchestrator:
-    return RimOrchestrator(repository=RunRepository(), router=ProviderRouter())
+def _build_orchestrator(
+    *,
+    repository: RunRepository | None = None,
+    router: ProviderRouter | None = None,
+) -> RimOrchestrator:
+    return build_embedded_orchestrator(
+        repository=repository or RunRepository(),
+        router=router or ProviderRouter(),
+    )
 
 
 async def _cmd_analyze(args: argparse.Namespace) -> int:
@@ -161,7 +169,7 @@ def _cmd_run_feedback(args: argparse.Namespace) -> int:
 
 async def _cmd_run_cancel(args: argparse.Namespace) -> int:
     repository = RunRepository()
-    orchestrator = RimOrchestrator(repository=repository, router=ProviderRouter())
+    orchestrator = _build_orchestrator(repository=repository, router=ProviderRouter())
     queue = RunJobQueue(orchestrator=orchestrator, repository=repository)
     run = await queue.cancel(args.run_id)
     if run is None:
@@ -173,7 +181,7 @@ async def _cmd_run_cancel(args: argparse.Namespace) -> int:
 
 async def _cmd_run_retry(args: argparse.Namespace) -> int:
     repository = RunRepository()
-    orchestrator = RimOrchestrator(repository=repository, router=ProviderRouter())
+    orchestrator = _build_orchestrator(repository=repository, router=ProviderRouter())
     queue = RunJobQueue(orchestrator=orchestrator, repository=repository)
     try:
         run = await queue.retry(args.run_id)

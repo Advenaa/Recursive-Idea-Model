@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn + engine modularization increments): `132` passing tests (`pytest -q`, February 17, 2026)
+- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn + engine modularization increments): `135` passing tests (`pytest -q`, February 17, 2026)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -258,6 +258,7 @@ Each run must return JSON with this minimum schema:
 - Add richer evaluation analytics (domain-level trend and regression deltas added on February 14, 2026)
 - Add reusable embedding API (`rim.engine`) with composable builder functions for product integration (done on February 17, 2026)
 - Add modular agent-pack registry + override surface for product-specific orchestration wiring (done on February 17, 2026)
+- Add config-driven agent pack loading + env selection (`RIM_AGENT_PACKS_PATH`, `RIM_AGENT_PACK`) so API/CLI can swap orchestration packs without code edits (done on February 17, 2026)
 - Add real single-call LLM baseline workflow (`rim eval baseline-llm`) for practical benchmark comparisons (done on February 17, 2026)
 
 ## 20) SOTA Alignment Status (vs `rim_paper_4.docx`)
@@ -281,6 +282,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Reusable execution runtime split from orchestration (`RimExecutionEngine` + thin `RimOrchestrator` adapter).
 - Public embedding API (`rim.engine`) with `build_engine`, `build_orchestrator`, and `build_agents`.
 - Modular agent-pack registry (`EngineAgentRegistry`) with validated stage overrides for external product integration.
+- Config-driven pack loader (`load_agent_packs_config`) and env-based pack activation path used by API/CLI startup.
 - Real single-call LLM baseline path (`rim eval baseline-llm`) for practical comparisons against normal deep-thinking model calls.
 
 ### 20.2 Partially Implemented

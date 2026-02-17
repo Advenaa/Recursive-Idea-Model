@@ -17,12 +17,13 @@ from rim.core.schemas import (
     RunListResponse,
     RunLogsResponse,
 )
+from rim.engine import build_orchestrator as build_embedded_orchestrator
 from rim.providers.router import ProviderRouter
 from rim.storage.repo import RunRepository
 
 repository = RunRepository()
 router = ProviderRouter()
-orchestrator = RimOrchestrator(repository=repository, router=router)
+orchestrator = build_embedded_orchestrator(repository=repository, router=router)
 job_queue = RunJobQueue(orchestrator=orchestrator, repository=repository)
 
 

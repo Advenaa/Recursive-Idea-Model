@@ -70,7 +70,28 @@ custom_agents = registry.build(
         # "run_critics": my_custom_critics,
     }
 )
-engine = build_engine(agents=custom_agents, registry=registry)
+engine = build_engine(agents=custom_agents)
+```
+
+Load packs from a config file without code edits:
+
+```json
+{
+  "packs": {
+    "my_pack": {
+      "base_pack": "default",
+      "overrides": {
+        "run_critics": "myapp.rim_plugins:run_critics"
+      }
+    }
+  }
+}
+```
+
+```bash
+export RIM_AGENT_PACKS_PATH=/absolute/path/agent_packs.json
+export RIM_AGENT_PACK=my_pack
+# API/CLI now resolve this pack automatically through rim.engine builders
 ```
 
 Quickstart:
