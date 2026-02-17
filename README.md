@@ -265,6 +265,7 @@ export RIM_ENABLE_DYNAMIC_SPECIALISTS=1
 export RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS=2
 export RIM_SPAWN_ROLE_BOOSTS='{"security":0.4}'
 export RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS='{"bioinformatics":{"routing_policy":"prioritize_domain_specific_signals","tools":["context_probe:bioinformatics","evidence_scan"]}}'
+export RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT='{"routing_policy":"prioritize_domain_specific_signals","tools":["evidence_scan","counterexample_search"]}'
 export RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS='{"bioinformatics":0.7}'
 export RIM_SPAWN_ROLE_ROUTING_OVERRIDES='{"security":"prioritize_high_severity_and_compliance_constraints"}'
 export RIM_SPAWN_ROLE_TOOL_OVERRIDES='{"security":["threat_model","policy_checklist"]}'

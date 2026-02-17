@@ -238,6 +238,44 @@ def test_spawn_plan_applies_dynamic_token_contracts_from_policy(tmp_path, monkey
     assert payload["dynamic_role_contracts"]["aodkinv"]["routing_policy"] == "prioritize_domain_specific_signals"
 
 
+def test_spawn_plan_applies_dynamic_default_contract_fallback(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    policy_path = tmp_path / "spawn_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "policy_env": {
+                        "RIM_ENABLE_DYNAMIC_SPECIALISTS": 1,
+                        "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": 2,
+                        "RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS": {"aodkinv": 2.5},
+                        "RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT": {
+                            "routing_policy": "prioritize_domain_specific_signals",
+                            "tools": ["evidence_scan", "counterexample_search"],
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RIM_SPAWN_POLICY_PATH", str(policy_path))
+    monkeypatch.delenv("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS", raising=False)
+    monkeypatch.delenv("RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT", raising=False)
+    monkeypatch.delenv("RIM_SPAWN_ROLE_ROUTING_OVERRIDES", raising=False)
+    monkeypatch.delenv("RIM_SPAWN_ROLE_TOOL_OVERRIDES", raising=False)
+
+    payload = build_spawn_plan(
+        mode="deep",
+        domain="general",
+        constraints=["Need aodkinv controls before launch"],
+        memory_context=[],
+    )
+    dynamic_item = next(item for item in payload["extra_critics"] if item["role"] == "dynamic_aodkinv")
+    assert dynamic_item["tool_contract"]["routing_policy"] == "prioritize_domain_specific_signals"
+    assert dynamic_item["tool_contract"]["tools"] == ["evidence_scan", "counterexample_search"]
+    assert payload["dynamic_default_contract"]["routing_policy"] == "prioritize_domain_specific_signals"
+
+
 def test_spawn_plan_applies_adaptive_role_boost_adjustments() -> None:
     payload = build_spawn_plan(
         mode="deep",

@@ -280,6 +280,13 @@ def _parse_dynamic_contract_map_env(
     return _coerce_dynamic_contract_map(payload)
 
 
+def _parse_dynamic_contract_env(name: str, default: dict[str, Any]) -> dict[str, Any]:
+    payload = _parse_json_env(name)
+    if payload is None:
+        return _coerce_dynamic_contract(default)
+    return _coerce_dynamic_contract(payload)
+
+
 def _extract_policy_env(payload: object) -> dict[str, object]:
     if not isinstance(payload, dict):
         return {}
@@ -320,6 +327,7 @@ def _load_spawn_policy_env(path_value: str) -> tuple[dict[str, object], str | No
         "RIM_SPAWN_ROLE_ROUTING_OVERRIDES",
         "RIM_SPAWN_ROLE_TOOL_OVERRIDES",
         "RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS",
+        "RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT",
     }
     filtered = {key: value for key, value in env.items() if key in allowed}
     if not filtered:
@@ -450,6 +458,7 @@ def build_spawn_plan(
     role_routing_overrides_default: dict[str, str] = {}
     role_tool_overrides_default: dict[str, list[str]] = {}
     dynamic_role_contracts_default: dict[str, dict[str, Any]] = {}
+    dynamic_default_contract_default: dict[str, Any] = {}
     if spawn_policy_env:
         min_role_score_default = _coerce_float(
             spawn_policy_env.get("RIM_SPAWN_MIN_ROLE_SCORE"),
@@ -498,6 +507,9 @@ def build_spawn_plan(
         dynamic_role_contracts_default = _coerce_dynamic_contract_map(
             spawn_policy_env.get("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS")
         )
+        dynamic_default_contract_default = _coerce_dynamic_contract(
+            spawn_policy_env.get("RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT")
+        )
     min_role_score = _parse_float_env(
         "RIM_SPAWN_MIN_ROLE_SCORE",
         min_role_score_default,
@@ -537,6 +549,10 @@ def build_spawn_plan(
     dynamic_role_contracts = _parse_dynamic_contract_map_env(
         "RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS",
         dynamic_role_contracts_default,
+    )
+    dynamic_default_contract = _parse_dynamic_contract_env(
+        "RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT",
+        dynamic_default_contract_default,
     )
     adaptive_role_boosts_map = _coerce_float_map(
         adaptive_role_boosts or {},
@@ -609,7 +625,11 @@ def build_spawn_plan(
             if score < min_role_score:
                 continue
             dynamic_role = f"dynamic_{token}"
-            dynamic_contract = dynamic_role_contracts.get(token) or {}
+            dynamic_contract = (
+                dynamic_role_contracts.get(token)
+                or dynamic_default_contract
+                or {}
+            )
             contract_routing_policy = str(dynamic_contract.get("routing_policy") or "").strip()
             contract_tools = _coerce_tools(dynamic_contract.get("tools"))
             routing_policy = (
@@ -683,6 +703,7 @@ def build_spawn_plan(
         "adaptive_meta": dict(adaptive_meta or {}),
         "dynamic_token_boosts": dynamic_token_boosts,
         "dynamic_role_contracts": dynamic_role_contracts,
+        "dynamic_default_contract": dynamic_default_contract,
         "role_routing_overrides": role_routing_overrides,
         "role_tool_overrides": role_tool_overrides,
         "policy_applied": bool(spawn_policy_env),

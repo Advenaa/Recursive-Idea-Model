@@ -777,6 +777,8 @@ def test_train_spawn_policy_aggregates_reports() -> None:
     assert "security" in env["RIM_SPAWN_ROLE_BOOSTS"]
     assert "RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS" in env
     assert "aodkinv" in env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"]
+    assert "RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT" in env
+    assert env["RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT"] == env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"]["aodkinv"]
     assert payload["recommended_exports"]
 
 
@@ -1055,6 +1057,8 @@ def test_train_rl_spawn_policy_outputs_credit_assignment() -> None:
     assert "RIM_SPAWN_ROLE_BOOSTS" in env
     assert "RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS" in env
     assert "bioinformatics" in env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"]
+    assert "RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT" in env
+    assert env["RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT"] == env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"]["bioinformatics"]
     assert "security" in env["RIM_SPAWN_ROLE_BOOSTS"]
     assert payload["recommended_exports"]
 

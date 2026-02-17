@@ -2616,6 +2616,8 @@ def calibrate_spawn_policy(
     role_stats = role_stats_raw if isinstance(role_stats_raw, dict) else {}
     role_boosts: dict[str, float] = {}
     dynamic_contracts: dict[str, dict[str, Any]] = {}
+    dynamic_default_contract: dict[str, Any] = {}
+    dynamic_default_score = 0.0
     for role, stats in role_stats.items():
         if not isinstance(stats, dict):
             continue
@@ -2654,6 +2656,10 @@ def calibrate_spawn_policy(
         if not contract:
             continue
         dynamic_contracts[token] = contract
+        contract_score = max(0.01, float(selected_count) * max(avg_run_quality, 0.05))
+        if contract_score >= dynamic_default_score:
+            dynamic_default_score = contract_score
+            dynamic_default_contract = contract
 
     rationale: list[str] = []
     if quality_pressure > 0.15:
@@ -2673,6 +2679,8 @@ def calibrate_spawn_policy(
         rationale.append("Specialist arbitration outcomes provide role-level signals for spawn role boosts.")
     if dynamic_contracts:
         rationale.append("Dynamic specialist routing/tools were learned from successful token-level runs.")
+    if dynamic_default_contract:
+        rationale.append("A default dynamic contract was learned for unseen dynamic tokens.")
 
     recommended_env = {
         "RIM_SPAWN_MIN_ROLE_SCORE": min_role_score,
@@ -2685,6 +2693,8 @@ def calibrate_spawn_policy(
         recommended_env["RIM_SPAWN_ROLE_BOOSTS"] = role_boosts
     if dynamic_contracts:
         recommended_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = dynamic_contracts
+    if dynamic_default_contract:
+        recommended_env["RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT"] = dynamic_default_contract
     return {
         "inputs": {
             "average_quality_score": avg_quality,
@@ -2747,6 +2757,8 @@ def train_spawn_policy(
     role_boost_total_weight: dict[str, float] = {}
     dynamic_contract_votes: dict[str, dict[str, float]] = {}
     dynamic_contract_payloads: dict[str, dict[str, dict[str, Any]]] = {}
+    dynamic_default_contract_votes: dict[str, float] = {}
+    dynamic_default_contract_payloads: dict[str, dict[str, Any]] = {}
     total_weight = 0.0
     quality_sum = 0.0
     runtime_sum = 0.0
@@ -2814,6 +2826,18 @@ def train_spawn_policy(
             votes[signature] = votes.get(signature, 0.0) + weight
             payloads = dynamic_contract_payloads.setdefault(token, {})
             payloads[signature] = normalized_contract
+        dynamic_default_contract = _normalize_dynamic_contract(
+            env.get("RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT")
+        )
+        if dynamic_default_contract:
+            signature = (
+                f"{dynamic_default_contract.get('routing_policy', '')}|||"
+                f"{'||'.join(dynamic_default_contract.get('tools', []))}"
+            )
+            dynamic_default_contract_votes[signature] = (
+                dynamic_default_contract_votes.get(signature, 0.0) + weight
+            )
+            dynamic_default_contract_payloads[signature] = dynamic_default_contract
         samples.append(
             {
                 "created_at": report.get("created_at"),
@@ -2870,10 +2894,21 @@ def train_spawn_policy(
         contract = payloads.get(signature)
         if contract:
             dynamic_contracts_final[token] = contract
+    dynamic_default_contract_final: dict[str, Any] = {}
+    if dynamic_default_contract_votes:
+        signature, _ = max(
+            dynamic_default_contract_votes.items(),
+            key=lambda item: item[1],
+        )
+        contract = dynamic_default_contract_payloads.get(signature)
+        if contract:
+            dynamic_default_contract_final = contract
     if role_boosts_final:
         policy_env["RIM_SPAWN_ROLE_BOOSTS"] = role_boosts_final
     if dynamic_contracts_final:
         policy_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = dynamic_contracts_final
+    if dynamic_default_contract_final:
+        policy_env["RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT"] = dynamic_default_contract_final
     avg_quality = quality_sum / len(valid_reports)
     avg_runtime = runtime_sum / len(valid_reports)
     avg_failure = failure_sum / len(valid_reports)
@@ -2896,6 +2931,8 @@ def train_spawn_policy(
         rationale.append("Specialist arbitration role outcomes contributed weighted spawn role-boost updates.")
     if dynamic_contracts_final:
         rationale.append("Dynamic token routing/tool contracts were preserved from weighted run outcomes.")
+    if dynamic_default_contract_final:
+        rationale.append("A default dynamic routing/tool contract was preserved for unseen dynamic tokens.")
 
     return {
         "report_count": len(valid_reports),
@@ -3724,6 +3761,12 @@ def _blend_spawn_policy_env(
     dynamic_contracts_fresh = _normalize_dynamic_contract_map(
         fresh_env.get("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS")
     )
+    dynamic_default_contract_prior = _normalize_dynamic_contract(
+        prior.get("RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT")
+    )
+    dynamic_default_contract_fresh = _normalize_dynamic_contract(
+        fresh_env.get("RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT")
+    )
 
     blended_env: dict[str, Any] = {
         "RIM_SPAWN_MIN_ROLE_SCORE": round(_clamp_float(min_role_score, 0.4, 3.0), 3),
@@ -3759,6 +3802,10 @@ def _blend_spawn_policy_env(
     combined_dynamic_contracts = {**dynamic_contracts_prior, **dynamic_contracts_fresh}
     if combined_dynamic_contracts:
         blended_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = combined_dynamic_contracts
+    if dynamic_default_contract_fresh:
+        blended_env["RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT"] = dynamic_default_contract_fresh
+    elif dynamic_default_contract_prior:
+        blended_env["RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT"] = dynamic_default_contract_prior
     return blended_env
 
 
@@ -4956,6 +5003,9 @@ def train_rl_spawn_policy(
     dynamic_role_contracts = _normalize_dynamic_contract_map(
         prior.get("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS")
     )
+    dynamic_default_contract = _normalize_dynamic_contract(
+        prior.get("RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT")
+    )
 
     if not experiences:
         spawn_env = _blend_spawn_policy_env(
@@ -4999,6 +5049,8 @@ def train_rl_spawn_policy(
     tool_votes: dict[str, dict[str, float]] = {}
     dynamic_contract_votes: dict[str, dict[str, float]] = {}
     dynamic_contract_payloads: dict[str, dict[str, dict[str, Any]]] = {}
+    dynamic_default_contract_votes: dict[str, float] = {}
+    dynamic_default_contract_payloads: dict[str, dict[str, Any]] = {}
 
     for _epoch in range(epoch_count):
         for exp in experiences:
@@ -5111,6 +5163,11 @@ def train_rl_spawn_policy(
                                 dynamic_contract_credit_totals.get(token),
                                 0.0,
                             ) + role_credit_each
+                            dynamic_default_contract_votes[signature] = _to_float(
+                                dynamic_default_contract_votes.get(signature),
+                                0.0,
+                            ) + role_credit_each
+                            dynamic_default_contract_payloads[signature] = dynamic_contract
                     continue
                 role_boosts[normalized_role] = round(
                     _clamp_float(
@@ -5216,6 +5273,11 @@ def train_rl_spawn_policy(
                                 dynamic_contract_credit_totals.get(token),
                                 0.0,
                             ) + role_outcome_credit
+                            dynamic_default_contract_votes[signature] = _to_float(
+                                dynamic_default_contract_votes.get(signature),
+                                0.0,
+                            ) + role_outcome_credit
+                            dynamic_default_contract_payloads[signature] = dynamic_contract
                     continue
                 role_boosts[normalized_role] = round(
                     _clamp_float(
@@ -5297,6 +5359,12 @@ def train_rl_spawn_policy(
         contract = token_payloads.get(winner[0])
         if contract:
             dynamic_role_contracts[token] = contract
+    if dynamic_default_contract_votes:
+        winner = max(dynamic_default_contract_votes.items(), key=lambda item: item[1])
+        if winner[1] > 0:
+            contract = dynamic_default_contract_payloads.get(winner[0])
+            if contract:
+                dynamic_default_contract = contract
 
     spawn_enable_dynamic = 1 if spawn["dynamic_enabled_score"] >= 0.5 else 0
     spawn_env: dict[str, Any] = {
@@ -5330,6 +5398,8 @@ def train_rl_spawn_policy(
         spawn_env["RIM_SPAWN_ROLE_TOOL_OVERRIDES"] = tool_overrides
     if dynamic_role_contracts:
         spawn_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = dynamic_role_contracts
+    if dynamic_default_contract:
+        spawn_env["RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT"] = dynamic_default_contract
 
     def _credit_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         positive = sum(float(item["credit"]) for item in items if float(item["credit"]) > 0.0)
