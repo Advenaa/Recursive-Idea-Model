@@ -183,6 +183,7 @@ rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.6
 rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval train-rl-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval train-rl-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
+rim eval train-rl-orchestration-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3
 # autolearn updates depth/specialist/arbitration/spawn/memory policy files under rim/eval/policies by default
 # specialist policy includes contract-controller defaults

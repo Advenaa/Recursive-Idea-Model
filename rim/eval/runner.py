@@ -5402,6 +5402,108 @@ def train_rl_spawn_policy(
     }
 
 
+def train_rl_orchestration_policies(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+    learning_rate: float = 0.18,
+    epochs: int = 3,
+    reward_runtime_weight: float = 0.35,
+    reward_failure_penalty: float = 1.0,
+    prior_depth_policy_env: dict[str, Any] | None = None,
+    prior_specialist_policy_env: dict[str, Any] | None = None,
+    prior_arbitration_policy_env: dict[str, Any] | None = None,
+    prior_spawn_policy_env: dict[str, Any] | None = None,
+    prior_memory_policy_env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    depth_learning = train_rl_depth_and_arbitration_policies(
+        reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+        learning_rate=learning_rate,
+        epochs=epochs,
+        reward_runtime_weight=reward_runtime_weight,
+        reward_failure_penalty=reward_failure_penalty,
+        prior_depth_policy_env=prior_depth_policy_env,
+        prior_specialist_policy_env=prior_specialist_policy_env,
+        prior_arbitration_policy_env=prior_arbitration_policy_env,
+    )
+    spawn_learning = train_rl_spawn_policy(
+        reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+        learning_rate=learning_rate,
+        epochs=epochs,
+        reward_runtime_weight=reward_runtime_weight,
+        reward_failure_penalty=reward_failure_penalty,
+        prior_spawn_policy_env=prior_spawn_policy_env,
+    )
+    memory_learning = train_rl_memory_policy(
+        reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+        learning_rate=learning_rate,
+        epochs=epochs,
+        reward_runtime_weight=reward_runtime_weight,
+        reward_failure_penalty=reward_failure_penalty,
+        prior_memory_policy_env=prior_memory_policy_env,
+    )
+    recommended_exports = sorted(
+        set(
+            list(depth_learning.get("recommended_exports") or [])
+            + list(spawn_learning.get("recommended_exports") or [])
+            + list(memory_learning.get("recommended_exports") or [])
+        )
+    )
+    return {
+        "optimizer": "rl_orchestration_bundle_v1",
+        "target_quality": target_quality,
+        "target_runtime_sec": target_runtime_sec,
+        "learning_rate": _clamp_float(float(learning_rate), 0.01, 1.0),
+        "epochs": _clamp_int(int(epochs), 1, 50),
+        "reward_runtime_weight": _clamp_float(float(reward_runtime_weight), 0.0, 2.0),
+        "reward_failure_penalty": _clamp_float(float(reward_failure_penalty), 0.0, 4.0),
+        "report_count": _to_int(depth_learning.get("report_count"), 0),
+        "report_ids": list(depth_learning.get("report_ids") or []),
+        "depth_policy": depth_learning["depth_policy"],
+        "specialist_policy": depth_learning["specialist_policy"],
+        "arbitration_policy": depth_learning["arbitration_policy"],
+        "spawn_policy": spawn_learning["spawn_policy"],
+        "memory_policy": memory_learning["memory_policy"],
+        "sub_optimizers": {
+            "depth_specialist_arbitration": depth_learning.get("optimizer"),
+            "spawn": spawn_learning.get("optimizer"),
+            "memory": memory_learning.get("optimizer"),
+        },
+        "credit_assignment": {
+            "depth": (depth_learning.get("credit_assignment") or {}).get("depth", {}),
+            "specialist": (depth_learning.get("credit_assignment") or {}).get("specialist", {}),
+            "arbitration": (depth_learning.get("credit_assignment") or {}).get(
+                "arbitration",
+                {},
+            ),
+            "spawn": (spawn_learning.get("credit_assignment") or {}).get("spawn", {}),
+            "memory": (memory_learning.get("credit_assignment") or {}).get("memory", {}),
+            "spawn_role_boosts": (spawn_learning.get("credit_assignment") or {}).get(
+                "role_boosts",
+                [],
+            ),
+            "spawn_dynamic_token_boosts": (spawn_learning.get("credit_assignment") or {}).get(
+                "dynamic_token_boosts",
+                [],
+            ),
+            "spawn_dynamic_role_contracts": (
+                (spawn_learning.get("credit_assignment") or {}).get(
+                    "dynamic_role_contracts",
+                    [],
+                )
+            ),
+        },
+        "recommended_exports": recommended_exports,
+    }
+
+
 def _load_recent_reports(
     *,
     reports_dir: Path,
@@ -5493,8 +5595,10 @@ async def run_online_depth_arbitration_learning_loop(
             prior_depth_env = load_policy_env(depth_policy_path)
             prior_specialist_env = load_policy_env(specialist_policy_path)
             prior_arbitration_env = load_policy_env(arbitration_policy_path)
+            prior_spawn_env = load_policy_env(spawn_policy_path)
+            prior_memory_env = load_policy_env(memory_policy_path)
             if optimizer_name == "rl":
-                learning = train_rl_depth_and_arbitration_policies(
+                orchestration_learning = train_rl_orchestration_policies(
                     training_reports,
                     target_quality=target_quality,
                     target_runtime_sec=target_runtime_sec,
@@ -5505,7 +5609,27 @@ async def run_online_depth_arbitration_learning_loop(
                     prior_depth_policy_env=prior_depth_env,
                     prior_specialist_policy_env=prior_specialist_env,
                     prior_arbitration_policy_env=prior_arbitration_env,
+                    prior_spawn_policy_env=prior_spawn_env,
+                    prior_memory_policy_env=prior_memory_env,
                 )
+                learning = {
+                    "optimizer": orchestration_learning.get("optimizer"),
+                    "depth_policy": orchestration_learning["depth_policy"],
+                    "specialist_policy": orchestration_learning["specialist_policy"],
+                    "arbitration_policy": orchestration_learning["arbitration_policy"],
+                }
+                spawn_learning = {
+                    "optimizer": (
+                        orchestration_learning.get("sub_optimizers") or {}
+                    ).get("spawn"),
+                    "spawn_policy": orchestration_learning["spawn_policy"],
+                }
+                memory_learning = {
+                    "optimizer": (
+                        orchestration_learning.get("sub_optimizers") or {}
+                    ).get("memory"),
+                    "memory_policy": orchestration_learning["memory_policy"],
+                }
             else:
                 learning = train_online_depth_and_arbitration_policies(
                     training_reports,
@@ -5516,19 +5640,6 @@ async def run_online_depth_arbitration_learning_loop(
                     prior_specialist_policy_env=prior_specialist_env,
                     prior_arbitration_policy_env=prior_arbitration_env,
                 )
-            prior_spawn_env = load_policy_env(spawn_policy_path)
-            if optimizer_name == "rl":
-                spawn_learning = train_rl_spawn_policy(
-                    training_reports,
-                    target_quality=target_quality,
-                    target_runtime_sec=target_runtime_sec,
-                    learning_rate=alpha,
-                    epochs=normalized_rl_epochs,
-                    reward_runtime_weight=normalized_rl_runtime_weight,
-                    reward_failure_penalty=normalized_rl_failure_penalty,
-                    prior_spawn_policy_env=prior_spawn_env,
-                )
-            else:
                 spawn_learning = train_online_spawn_policy(
                     training_reports,
                     target_quality=target_quality,
@@ -5536,19 +5647,6 @@ async def run_online_depth_arbitration_learning_loop(
                     learning_rate=alpha,
                     prior_spawn_policy_env=prior_spawn_env,
                 )
-            prior_memory_env = load_policy_env(memory_policy_path)
-            if optimizer_name == "rl":
-                memory_learning = train_rl_memory_policy(
-                    training_reports,
-                    target_quality=target_quality,
-                    target_runtime_sec=target_runtime_sec,
-                    learning_rate=alpha,
-                    epochs=normalized_rl_epochs,
-                    reward_runtime_weight=normalized_rl_runtime_weight,
-                    reward_failure_penalty=normalized_rl_failure_penalty,
-                    prior_memory_policy_env=prior_memory_env,
-                )
-            else:
                 memory_learning = train_online_memory_policy(
                     training_reports,
                     target_quality=target_quality,

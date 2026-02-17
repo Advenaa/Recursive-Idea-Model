@@ -26,6 +26,7 @@ from rim.eval.runner import (
     train_memory_policy,
     train_rl_depth_and_arbitration_policies,
     train_rl_memory_policy,
+    train_rl_orchestration_policies,
     train_rl_spawn_policy,
     train_spawn_policy,
     train_specialist_arbitration_policy,
@@ -1130,6 +1131,99 @@ def test_train_rl_memory_policy_outputs_credit_assignment() -> None:
     assert "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER" in env
     assert "RIM_MEMORY_QUALITY_LOOKBACK_RUNS" in env
     assert "RIM_MEMORY_QUALITY_MIN_FOLDS" in env
+    assert payload["recommended_exports"]
+
+
+def test_train_rl_orchestration_policies_outputs_bundle() -> None:
+    reports = [
+        {
+            "created_at": "2026-02-14T00:00:00Z",
+            "dataset_size": 1,
+            "average_quality_score": 0.62,
+            "average_runtime_sec": 63.0,
+            "failure_count": 0,
+            "mode": "deep",
+            "runs": [
+                {
+                    "id": "run-a",
+                    "run_id": "run-a",
+                    "status": "completed",
+                    "mode": "deep",
+                    "runtime_sec": 61.0,
+                    "quality": {"quality_score": 0.64},
+                    "telemetry": {
+                        "disagreement_count": 2,
+                        "diversity_flagged_count": 1,
+                        "depth_max_cycles_config": 2,
+                        "depth_min_confidence_config": 0.8,
+                        "depth_max_residual_risks_config": 2,
+                        "depth_max_high_findings_config": 1,
+                        "specialist_max_jobs_config": 2,
+                        "specialist_min_confidence_config": 0.8,
+                        "specialist_loop_enabled_config": True,
+                        "arbitration_max_jobs_config": 2,
+                        "disagreement_arbitration_enabled_config": True,
+                        "devils_advocate_enabled_config": True,
+                        "devils_advocate_rounds_config": 1,
+                        "devils_advocate_min_confidence_config": 0.72,
+                        "spawn_selected_count": 2,
+                        "spawn_dynamic_count": 1,
+                        "spawn_selected_roles": ["security", "dynamic_bioinformatics"],
+                        "spawn_dynamic_roles": ["dynamic_bioinformatics"],
+                        "spawn_role_routing": {
+                            "security": "prioritize_high_severity_and_compliance_constraints",
+                            "dynamic_bioinformatics": "prioritize_domain_specific_signals",
+                        },
+                        "spawn_role_tools": {
+                            "security": ["threat_model", "policy_checklist"],
+                            "dynamic_bioinformatics": [
+                                "context_probe:bioinformatics",
+                                "evidence_scan",
+                            ],
+                        },
+                        "spawn_min_role_score_config": 0.9,
+                        "spawn_max_specialists_config": 3,
+                        "spawn_max_dynamic_specialists_config": 2,
+                        "spawn_dynamic_enabled_config": True,
+                        "specialist_role_action_counts": {
+                            "security": {"merge": 1, "escalate": 0, "drop": 0, "total": 1}
+                        },
+                        "specialist_role_avg_match_score": {"security": 1.5},
+                        "memory_fold_count": 2,
+                        "memory_fold_degradation_count": 0,
+                        "memory_fold_avg_novelty_ratio": 0.48,
+                        "memory_fold_avg_duplicate_ratio": 0.28,
+                        "memory_fold_enabled_config": True,
+                        "memory_fold_max_entries_config": 14,
+                        "memory_fold_novelty_floor_config": 0.35,
+                        "memory_fold_max_duplicate_ratio_config": 0.5,
+                        "memory_quality_controller_enabled_config": True,
+                        "memory_quality_controller_applied_config": True,
+                        "memory_quality_controller_quality_pressure_config": 0.3,
+                    },
+                }
+            ],
+        }
+    ]
+    payload = train_rl_orchestration_policies(
+        reports,
+        target_quality=0.65,
+        target_runtime_sec=60.0,
+        learning_rate=0.2,
+        epochs=2,
+    )
+    assert payload["optimizer"] == "rl_orchestration_bundle_v1"
+    assert "depth_policy" in payload
+    assert "specialist_policy" in payload
+    assert "arbitration_policy" in payload
+    assert "spawn_policy" in payload
+    assert "memory_policy" in payload
+    assert "sub_optimizers" in payload
+    assert payload["sub_optimizers"]["spawn"] == "rl_spawn_credit_assignment_v1"
+    assert payload["sub_optimizers"]["memory"] == "rl_memory_credit_assignment_v1"
+    assert "RIM_SPAWN_MIN_ROLE_SCORE" in payload["spawn_policy"]["policy_env"]
+    assert "RIM_ENABLE_MEMORY_FOLDING" in payload["memory_policy"]["policy_env"]
+    assert "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER" in payload["memory_policy"]["policy_env"]
     assert payload["recommended_exports"]
 
 
