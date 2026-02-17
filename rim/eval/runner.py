@@ -479,6 +479,13 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
         "memory_fold_degradation_count": 0,
         "memory_fold_avg_novelty_ratio": 0.0,
         "memory_fold_avg_duplicate_ratio": 0.0,
+        "memory_fold_enabled_config": False,
+        "memory_fold_max_entries_config": 0,
+        "memory_fold_novelty_floor_config": 0.0,
+        "memory_fold_max_duplicate_ratio_config": 0.0,
+        "memory_quality_controller_enabled_config": False,
+        "memory_quality_controller_applied_config": False,
+        "memory_quality_controller_quality_pressure_config": 0.0,
     }
     memory_fold_novelty_total = 0.0
     memory_fold_duplicate_total = 0.0
@@ -545,6 +552,34 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
                 current = specialist_contract_role_boost_adjustments.get(role)
                 if current is None or abs(value) >= abs(current):
                     specialist_contract_role_boost_adjustments[role] = value
+            telemetry["memory_fold_enabled_config"] = (
+                telemetry["memory_fold_enabled_config"]
+                or bool(meta.get("memory_fold_enabled", False))
+            )
+            telemetry["memory_fold_max_entries_config"] = max(
+                telemetry["memory_fold_max_entries_config"],
+                _to_int(meta.get("memory_fold_max_entries"), 0),
+            )
+            telemetry["memory_fold_novelty_floor_config"] = max(
+                telemetry["memory_fold_novelty_floor_config"],
+                _to_float(meta.get("memory_fold_novelty_floor"), 0.0),
+            )
+            telemetry["memory_fold_max_duplicate_ratio_config"] = max(
+                telemetry["memory_fold_max_duplicate_ratio_config"],
+                _to_float(meta.get("memory_fold_max_duplicate_ratio"), 0.0),
+            )
+            telemetry["memory_quality_controller_enabled_config"] = (
+                telemetry["memory_quality_controller_enabled_config"]
+                or bool(meta.get("memory_quality_controller_enabled", False))
+            )
+            telemetry["memory_quality_controller_applied_config"] = (
+                telemetry["memory_quality_controller_applied_config"]
+                or bool(meta.get("memory_quality_controller_applied", False))
+            )
+            telemetry["memory_quality_controller_quality_pressure_config"] = max(
+                telemetry["memory_quality_controller_quality_pressure_config"],
+                _to_float(meta.get("memory_quality_controller_quality_pressure"), 0.0),
+            )
             continue
         if stage == "challenge_reconciliation":
             telemetry["disagreement_count"] = max(
@@ -3532,6 +3567,30 @@ def _blend_memory_policy_env(
         fresh_env.get("RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO"),
         0.5,
     )
+    quality_controller_enable_score = (1.0 - alpha) * _to_float(
+        prior.get("RIM_ENABLE_MEMORY_QUALITY_CONTROLLER"),
+        1.0,
+    )
+    quality_controller_enable_score += alpha * _to_float(
+        fresh_env.get("RIM_ENABLE_MEMORY_QUALITY_CONTROLLER"),
+        1.0,
+    )
+    quality_lookback_runs = (1.0 - alpha) * _to_float(
+        prior.get("RIM_MEMORY_QUALITY_LOOKBACK_RUNS"),
+        24.0,
+    )
+    quality_lookback_runs += alpha * _to_float(
+        fresh_env.get("RIM_MEMORY_QUALITY_LOOKBACK_RUNS"),
+        24.0,
+    )
+    quality_min_folds = (1.0 - alpha) * _to_float(
+        prior.get("RIM_MEMORY_QUALITY_MIN_FOLDS"),
+        4.0,
+    )
+    quality_min_folds += alpha * _to_float(
+        fresh_env.get("RIM_MEMORY_QUALITY_MIN_FOLDS"),
+        4.0,
+    )
     return {
         "RIM_ENABLE_MEMORY_FOLDING": 1 if enable_score >= 0.5 else 0,
         "RIM_MEMORY_FOLD_MAX_ENTRIES": _clamp_int(int(round(max_entries)), 6, 40),
@@ -3540,6 +3599,15 @@ def _blend_memory_policy_env(
             _clamp_float(max_duplicate_ratio, 0.2, 0.8),
             3,
         ),
+        "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER": 1
+        if quality_controller_enable_score >= 0.5
+        else 0,
+        "RIM_MEMORY_QUALITY_LOOKBACK_RUNS": _clamp_int(
+            int(round(quality_lookback_runs)),
+            1,
+            500,
+        ),
+        "RIM_MEMORY_QUALITY_MIN_FOLDS": _clamp_int(int(round(quality_min_folds)), 1, 200),
     }
 
 
@@ -3841,6 +3909,368 @@ def train_online_memory_policy(
         "target_runtime_sec": target_runtime_sec,
         "memory_policy": payload,
         "recommended_exports": payload["recommended_exports"],
+    }
+
+
+def _rl_memory_experiences(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float,
+    target_runtime_sec: float | None,
+    runtime_weight: float,
+    failure_penalty: float,
+) -> list[dict[str, Any]]:
+    experiences: list[dict[str, Any]] = []
+    runtime_weight_normalized = _clamp_float(float(runtime_weight), 0.0, 2.0)
+    failure_penalty_normalized = _clamp_float(float(failure_penalty), 0.0, 4.0)
+    for report in reports:
+        runs = report.get("runs")
+        if not isinstance(runs, list):
+            continue
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            status = str(run.get("status") or "").strip().lower()
+            quality_payload = run.get("quality")
+            quality_score = (
+                float(quality_payload.get("quality_score"))
+                if isinstance(quality_payload, dict)
+                and isinstance(quality_payload.get("quality_score"), (int, float))
+                else 0.0
+            )
+            runtime_sec = _to_float(run.get("runtime_sec"), 0.0)
+            runtime_pressure = 0.0
+            if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+                runtime_pressure = max(
+                    0.0,
+                    (runtime_sec - float(target_runtime_sec)) / float(target_runtime_sec),
+                )
+            telemetry = run.get("telemetry")
+            telemetry_dict = telemetry if isinstance(telemetry, dict) else {}
+            fold_count = _to_float(telemetry_dict.get("memory_fold_count"), 0.0)
+            degradation_count = _to_float(
+                telemetry_dict.get("memory_fold_degradation_count"),
+                0.0,
+            )
+            degradation_rate = (
+                degradation_count / max(1.0, fold_count)
+                if fold_count > 0.0
+                else 0.0
+            )
+            novelty_ratio = _clamp_float(
+                _to_float(telemetry_dict.get("memory_fold_avg_novelty_ratio"), 0.0),
+                0.0,
+                1.0,
+            )
+            duplicate_ratio = _clamp_float(
+                _to_float(telemetry_dict.get("memory_fold_avg_duplicate_ratio"), 0.0),
+                0.0,
+                1.0,
+            )
+            memory_fold_enabled = _to_float(
+                1.0 if telemetry_dict.get("memory_fold_enabled_config") else 0.0,
+                0.0,
+            )
+            memory_fold_max_entries = _to_float(
+                telemetry_dict.get("memory_fold_max_entries_config"),
+                12.0,
+            )
+            if memory_fold_max_entries <= 0.0:
+                memory_fold_max_entries = 12.0
+            memory_fold_novelty_floor = _to_float(
+                telemetry_dict.get("memory_fold_novelty_floor_config"),
+                0.35,
+            )
+            if memory_fold_novelty_floor <= 0.0:
+                memory_fold_novelty_floor = 0.35
+            memory_fold_max_duplicate_ratio = _to_float(
+                telemetry_dict.get("memory_fold_max_duplicate_ratio_config"),
+                0.5,
+            )
+            if memory_fold_max_duplicate_ratio <= 0.0:
+                memory_fold_max_duplicate_ratio = 0.5
+            memory_quality_controller_enabled = _to_float(
+                1.0 if telemetry_dict.get("memory_quality_controller_enabled_config") else 0.0,
+                0.0,
+            )
+            memory_quality_controller_applied = _to_float(
+                1.0 if telemetry_dict.get("memory_quality_controller_applied_config") else 0.0,
+                0.0,
+            )
+            memory_quality_controller_quality_pressure = _to_float(
+                telemetry_dict.get("memory_quality_controller_quality_pressure_config"),
+                0.0,
+            )
+
+            reward = quality_score - (runtime_weight_normalized * runtime_pressure)
+            reward -= 0.28 * degradation_rate
+            reward -= 0.12 * max(duplicate_ratio - 0.45, 0.0)
+            reward += 0.08 * max(novelty_ratio - 0.35, 0.0)
+            if status in {"failed", "canceled"}:
+                reward -= failure_penalty_normalized
+            if status == "partial":
+                reward -= (0.5 * failure_penalty_normalized)
+            experiences.append(
+                {
+                    "run_id": str(run.get("run_id") or run.get("id") or f"run-{len(experiences)+1}"),
+                    "status": status,
+                    "quality_score": quality_score,
+                    "runtime_sec": runtime_sec,
+                    "runtime_pressure": runtime_pressure,
+                    "quality_gap": float(target_quality) - quality_score,
+                    "degradation_rate": degradation_rate,
+                    "novelty_ratio": novelty_ratio,
+                    "duplicate_ratio": duplicate_ratio,
+                    "reward": reward,
+                    "actions": {
+                        "memory_fold_enabled": memory_fold_enabled,
+                        "memory_fold_max_entries": memory_fold_max_entries,
+                        "memory_fold_novelty_floor": memory_fold_novelty_floor,
+                        "memory_fold_max_duplicate_ratio": memory_fold_max_duplicate_ratio,
+                        "memory_quality_controller_enabled": memory_quality_controller_enabled,
+                        "memory_quality_controller_applied": memory_quality_controller_applied,
+                        "memory_quality_controller_quality_pressure": memory_quality_controller_quality_pressure,
+                    },
+                }
+            )
+    return experiences
+
+
+def train_rl_memory_policy(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+    learning_rate: float = 0.18,
+    epochs: int = 3,
+    reward_runtime_weight: float = 0.35,
+    reward_failure_penalty: float = 1.0,
+    prior_memory_policy_env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    valid_reports, report_ids = _valid_training_reports(reports)
+    experiences = _rl_memory_experiences(
+        valid_reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+        runtime_weight=reward_runtime_weight,
+        failure_penalty=reward_failure_penalty,
+    )
+    alpha = _clamp_float(float(learning_rate), 0.01, 1.0)
+    epoch_count = _clamp_int(int(epochs), 1, 50)
+    runtime_weight_normalized = _clamp_float(float(reward_runtime_weight), 0.0, 2.0)
+    failure_penalty_normalized = _clamp_float(float(reward_failure_penalty), 0.0, 4.0)
+    prior = prior_memory_policy_env or {}
+
+    memory = {
+        "enable_score": _to_float(prior.get("RIM_ENABLE_MEMORY_FOLDING"), 1.0),
+        "max_entries": _to_float(prior.get("RIM_MEMORY_FOLD_MAX_ENTRIES"), 12.0),
+        "novelty_floor": _to_float(prior.get("RIM_MEMORY_FOLD_NOVELTY_FLOOR"), 0.35),
+        "max_duplicate_ratio": _to_float(
+            prior.get("RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO"),
+            0.5,
+        ),
+        "quality_controller_enabled_score": _to_float(
+            prior.get("RIM_ENABLE_MEMORY_QUALITY_CONTROLLER"),
+            1.0,
+        ),
+        "quality_lookback_runs": _to_float(
+            prior.get("RIM_MEMORY_QUALITY_LOOKBACK_RUNS"),
+            24.0,
+        ),
+        "quality_min_folds": _to_float(prior.get("RIM_MEMORY_QUALITY_MIN_FOLDS"), 4.0),
+    }
+
+    if not experiences:
+        memory_env = _blend_memory_policy_env(
+            prior_env=prior_memory_policy_env,
+            fresh_env={},
+            learning_rate=0.0,
+        )
+        payload = {
+            "policy_env": memory_env,
+            "recommended_exports": calibration_env_exports({"recommended_env": memory_env}),
+            "rationale": ["No eligible run experiences; returning prior/default memory policy."],
+            "optimizer": "rl_memory_credit_assignment_v1",
+            "epochs": epoch_count,
+        }
+        return {
+            "optimizer": "rl_memory_credit_assignment_v1",
+            "report_count": len(valid_reports),
+            "report_ids": report_ids,
+            "experience_count": 0,
+            "learning_rate": alpha,
+            "epochs": epoch_count,
+            "target_quality": target_quality,
+            "target_runtime_sec": target_runtime_sec,
+            "memory_policy": payload,
+            "credit_assignment": {
+                "memory": {"positive": 0.0, "negative": 0.0, "top_runs": []},
+            },
+            "recommended_exports": payload["recommended_exports"],
+        }
+
+    rewards = [float(item["reward"]) for item in experiences]
+    reward_baseline = sum(rewards) / len(rewards)
+    memory_credits: list[dict[str, Any]] = []
+
+    for _epoch in range(epoch_count):
+        for exp in experiences:
+            reward = _to_float(exp.get("reward"), 0.0)
+            advantage = reward - reward_baseline
+            runtime_pressure = _to_float(exp.get("runtime_pressure"), 0.0)
+            quality_gap = _to_float(exp.get("quality_gap"), 0.0)
+            degradation_rate = _to_float(exp.get("degradation_rate"), 0.0)
+            novelty_ratio = _to_float(exp.get("novelty_ratio"), 0.0)
+            duplicate_ratio = _to_float(exp.get("duplicate_ratio"), 0.0)
+            actions = exp.get("actions")
+            action_payload = actions if isinstance(actions, dict) else {}
+            fold_enabled_action = _to_float(action_payload.get("memory_fold_enabled"), 1.0)
+            max_entries_action = _to_float(
+                action_payload.get("memory_fold_max_entries"),
+                12.0,
+            )
+            novelty_floor_action = _to_float(
+                action_payload.get("memory_fold_novelty_floor"),
+                0.35,
+            )
+            max_duplicate_ratio_action = _to_float(
+                action_payload.get("memory_fold_max_duplicate_ratio"),
+                0.5,
+            )
+            quality_controller_enabled_action = _to_float(
+                action_payload.get("memory_quality_controller_enabled"),
+                1.0,
+            )
+            quality_controller_applied_action = _to_float(
+                action_payload.get("memory_quality_controller_applied"),
+                0.0,
+            )
+            quality_controller_quality_pressure = _to_float(
+                action_payload.get("memory_quality_controller_quality_pressure"),
+                0.0,
+            )
+
+            memory_signal = (
+                quality_gap
+                + (0.9 * degradation_rate)
+                + (0.5 * max(0.35 - novelty_ratio, 0.0))
+                + (0.6 * max(duplicate_ratio - 0.45, 0.0))
+                + (0.25 * max(quality_controller_quality_pressure, 0.0))
+                - (0.75 * runtime_pressure)
+            )
+            action_intensity = max(
+                0.0,
+                (0.15 * fold_enabled_action)
+                + (0.12 * max(max_entries_action - 12.0, 0.0))
+                + (0.20 * max(novelty_floor_action - 0.35, 0.0))
+                + (0.16 * max(0.5 - max_duplicate_ratio_action, 0.0))
+                + (0.16 * quality_controller_enabled_action)
+                + (0.12 * quality_controller_applied_action),
+            )
+            memory_credit = advantage * memory_signal * (1.0 + (0.2 * action_intensity))
+
+            memory["max_entries"] += alpha * (-1.05 * memory_credit)
+            memory["novelty_floor"] += alpha * (0.085 * memory_credit)
+            memory["max_duplicate_ratio"] += alpha * (-0.09 * memory_credit)
+            memory["enable_score"] += alpha * (0.28 * memory_credit)
+            memory["quality_controller_enabled_score"] += alpha * (0.22 * memory_credit)
+            memory["quality_lookback_runs"] += alpha * (4.0 * memory_credit)
+            memory["quality_min_folds"] += alpha * (1.5 * memory_credit)
+
+            memory["max_entries"] = _clamp_float(memory["max_entries"], 6.0, 40.0)
+            memory["novelty_floor"] = _clamp_float(memory["novelty_floor"], 0.15, 0.8)
+            memory["max_duplicate_ratio"] = _clamp_float(
+                memory["max_duplicate_ratio"],
+                0.2,
+                0.8,
+            )
+            memory["enable_score"] = _clamp_float(memory["enable_score"], 0.0, 1.0)
+            memory["quality_controller_enabled_score"] = _clamp_float(
+                memory["quality_controller_enabled_score"],
+                0.0,
+                1.0,
+            )
+            memory["quality_lookback_runs"] = _clamp_float(
+                memory["quality_lookback_runs"],
+                1.0,
+                500.0,
+            )
+            memory["quality_min_folds"] = _clamp_float(
+                memory["quality_min_folds"],
+                1.0,
+                200.0,
+            )
+
+            memory_credits.append(
+                {
+                    "run_id": exp["run_id"],
+                    "credit": round(memory_credit, 6),
+                    "advantage": round(advantage, 6),
+                    "signal": round(memory_signal, 6),
+                    "action_intensity": round(action_intensity, 6),
+                }
+            )
+
+    memory_env = {
+        "RIM_ENABLE_MEMORY_FOLDING": 1 if memory["enable_score"] >= 0.5 else 0,
+        "RIM_MEMORY_FOLD_MAX_ENTRIES": _clamp_int(int(round(memory["max_entries"])), 6, 40),
+        "RIM_MEMORY_FOLD_NOVELTY_FLOOR": round(memory["novelty_floor"], 3),
+        "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO": round(memory["max_duplicate_ratio"], 3),
+        "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER": 1
+        if memory["quality_controller_enabled_score"] >= 0.5
+        else 0,
+        "RIM_MEMORY_QUALITY_LOOKBACK_RUNS": _clamp_int(
+            int(round(memory["quality_lookback_runs"])),
+            1,
+            500,
+        ),
+        "RIM_MEMORY_QUALITY_MIN_FOLDS": _clamp_int(
+            int(round(memory["quality_min_folds"])),
+            1,
+            200,
+        ),
+    }
+
+    def _credit_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+        positive = sum(float(item["credit"]) for item in items if float(item["credit"]) > 0.0)
+        negative = sum(float(item["credit"]) for item in items if float(item["credit"]) < 0.0)
+        ranked = sorted(items, key=lambda item: abs(float(item["credit"])), reverse=True)[:8]
+        return {
+            "positive": round(positive, 6),
+            "negative": round(negative, 6),
+            "top_runs": ranked,
+        }
+
+    memory_payload = {
+        "policy_env": memory_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": memory_env}),
+        "rationale": [
+            "Memory fold policy updated with reward/advantage credits from degradation and runtime trends.",
+        ],
+        "optimizer": "rl_memory_credit_assignment_v1",
+        "epochs": epoch_count,
+    }
+    return {
+        "optimizer": "rl_memory_credit_assignment_v1",
+        "report_count": len(valid_reports),
+        "report_ids": report_ids,
+        "experience_count": len(experiences),
+        "learning_rate": alpha,
+        "epochs": epoch_count,
+        "target_quality": target_quality,
+        "target_runtime_sec": target_runtime_sec,
+        "reward_summary": {
+            "mean_reward": round(reward_baseline, 6),
+            "max_reward": round(max(rewards), 6),
+            "min_reward": round(min(rewards), 6),
+            "runtime_weight": runtime_weight_normalized,
+            "failure_penalty": failure_penalty_normalized,
+        },
+        "memory_policy": memory_payload,
+        "credit_assignment": {
+            "memory": _credit_summary(memory_credits),
+        },
+        "recommended_exports": memory_payload["recommended_exports"],
     }
 
 
@@ -5107,13 +5537,25 @@ async def run_online_depth_arbitration_learning_loop(
                     prior_spawn_policy_env=prior_spawn_env,
                 )
             prior_memory_env = load_policy_env(memory_policy_path)
-            memory_learning = train_online_memory_policy(
-                training_reports,
-                target_quality=target_quality,
-                target_runtime_sec=target_runtime_sec,
-                learning_rate=alpha,
-                prior_memory_policy_env=prior_memory_env,
-            )
+            if optimizer_name == "rl":
+                memory_learning = train_rl_memory_policy(
+                    training_reports,
+                    target_quality=target_quality,
+                    target_runtime_sec=target_runtime_sec,
+                    learning_rate=alpha,
+                    epochs=normalized_rl_epochs,
+                    reward_runtime_weight=normalized_rl_runtime_weight,
+                    reward_failure_penalty=normalized_rl_failure_penalty,
+                    prior_memory_policy_env=prior_memory_env,
+                )
+            else:
+                memory_learning = train_online_memory_policy(
+                    training_reports,
+                    target_quality=target_quality,
+                    target_runtime_sec=target_runtime_sec,
+                    learning_rate=alpha,
+                    prior_memory_policy_env=prior_memory_env,
+                )
             depth_save_path = save_policy_artifact(
                 learning["depth_policy"],
                 policy_kind="depth",
@@ -5186,6 +5628,7 @@ async def run_online_depth_arbitration_learning_loop(
                     },
                     "training_report_count": len(training_reports),
                     "optimizer": learning.get("optimizer", optimizer_name),
+                    "memory_optimizer": memory_learning.get("optimizer", optimizer_name),
                     "depth_policy_path": str(depth_save_path),
                     "specialist_policy_path": str(specialist_save_path),
                     "arbitration_policy_path": str(arbitration_save_path),

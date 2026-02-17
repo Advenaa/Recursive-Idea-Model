@@ -25,6 +25,7 @@ from rim.eval.runner import (
     train_depth_policy,
     train_memory_policy,
     train_rl_depth_and_arbitration_policies,
+    train_rl_memory_policy,
     train_rl_spawn_policy,
     train_spawn_policy,
     train_specialist_arbitration_policy,
@@ -1057,6 +1058,81 @@ def test_train_rl_spawn_policy_outputs_credit_assignment() -> None:
     assert payload["recommended_exports"]
 
 
+def test_train_rl_memory_policy_outputs_credit_assignment() -> None:
+    reports = [
+        {
+            "created_at": "2026-02-14T00:00:00Z",
+            "dataset_size": 2,
+            "average_quality_score": 0.6,
+            "average_runtime_sec": 66.0,
+            "failure_count": 0,
+            "mode": "deep",
+            "runs": [
+                {
+                    "id": "run-a",
+                    "run_id": "run-a",
+                    "status": "completed",
+                    "runtime_sec": 52.0,
+                    "quality": {"quality_score": 0.71},
+                    "telemetry": {
+                        "memory_fold_count": 2,
+                        "memory_fold_degradation_count": 0,
+                        "memory_fold_avg_novelty_ratio": 0.55,
+                        "memory_fold_avg_duplicate_ratio": 0.22,
+                        "memory_fold_enabled_config": True,
+                        "memory_fold_max_entries_config": 14,
+                        "memory_fold_novelty_floor_config": 0.32,
+                        "memory_fold_max_duplicate_ratio_config": 0.55,
+                        "memory_quality_controller_enabled_config": True,
+                        "memory_quality_controller_applied_config": True,
+                        "memory_quality_controller_quality_pressure_config": 0.4,
+                    },
+                },
+                {
+                    "id": "run-b",
+                    "run_id": "run-b",
+                    "status": "completed",
+                    "runtime_sec": 75.0,
+                    "quality": {"quality_score": 0.49},
+                    "telemetry": {
+                        "memory_fold_count": 2,
+                        "memory_fold_degradation_count": 1,
+                        "memory_fold_avg_novelty_ratio": 0.28,
+                        "memory_fold_avg_duplicate_ratio": 0.62,
+                        "memory_fold_enabled_config": True,
+                        "memory_fold_max_entries_config": 20,
+                        "memory_fold_novelty_floor_config": 0.41,
+                        "memory_fold_max_duplicate_ratio_config": 0.36,
+                        "memory_quality_controller_enabled_config": True,
+                        "memory_quality_controller_applied_config": True,
+                        "memory_quality_controller_quality_pressure_config": 0.68,
+                    },
+                },
+            ],
+        }
+    ]
+    payload = train_rl_memory_policy(
+        reports,
+        target_quality=0.65,
+        target_runtime_sec=60.0,
+        learning_rate=0.2,
+        epochs=2,
+    )
+    assert payload["optimizer"] == "rl_memory_credit_assignment_v1"
+    assert payload["experience_count"] == 2
+    assert "memory_policy" in payload
+    assert payload["credit_assignment"]["memory"]["top_runs"]
+    env = payload["memory_policy"]["policy_env"]
+    assert "RIM_ENABLE_MEMORY_FOLDING" in env
+    assert "RIM_MEMORY_FOLD_MAX_ENTRIES" in env
+    assert "RIM_MEMORY_FOLD_NOVELTY_FLOOR" in env
+    assert "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO" in env
+    assert "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER" in env
+    assert "RIM_MEMORY_QUALITY_LOOKBACK_RUNS" in env
+    assert "RIM_MEMORY_QUALITY_MIN_FOLDS" in env
+    assert payload["recommended_exports"]
+
+
 def test_save_policy_artifact_writes_expected_shape(tmp_path) -> None:  # noqa: ANN001
     path = tmp_path / "depth_policy.json"
     policy = {
@@ -1124,3 +1200,5 @@ def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path
     assert payload["memory_policy_path"] == str(memory_policy_path)
     assert payload["final"]["memory_policy_path"] == str(memory_policy_path)
     assert payload["final"]["training_report_count"] >= 1
+    assert payload["final"]["memory_optimizer"] == "rl_memory_credit_assignment_v1"
+    assert "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER" in payload["final"]["memory_policy_env"]

@@ -988,6 +988,9 @@ def test_orchestrator_applies_memory_policy_file(
                         "RIM_MEMORY_FOLD_MAX_ENTRIES": 20,
                         "RIM_MEMORY_FOLD_NOVELTY_FLOOR": 0.55,
                         "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO": 0.3,
+                        "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER": 1,
+                        "RIM_MEMORY_QUALITY_LOOKBACK_RUNS": 18,
+                        "RIM_MEMORY_QUALITY_MIN_FOLDS": 3,
                     }
                 }
             }
@@ -1006,6 +1009,9 @@ def test_orchestrator_applies_memory_policy_file(
     monkeypatch.delenv("RIM_MEMORY_FOLD_MAX_ENTRIES", raising=False)
     monkeypatch.delenv("RIM_MEMORY_FOLD_NOVELTY_FLOOR", raising=False)
     monkeypatch.delenv("RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO", raising=False)
+    monkeypatch.delenv("RIM_ENABLE_MEMORY_QUALITY_CONTROLLER", raising=False)
+    monkeypatch.delenv("RIM_MEMORY_QUALITY_LOOKBACK_RUNS", raising=False)
+    monkeypatch.delenv("RIM_MEMORY_QUALITY_MIN_FOLDS", raising=False)
 
     repo = RunRepository(db_path=tmp_path / "rim_orchestrator_memory_policy.db")
     orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
@@ -1026,6 +1032,11 @@ def test_orchestrator_applies_memory_policy_file(
     assert len(fold_logs) == 1
     assert fold_logs[0].meta["memory_policy_applied"] is True
     assert fold_logs[0].meta["memory_policy_path"] == str(policy_path)
+    queue_logs = [log for log in orchestrator.get_run_logs(run_id).logs if log.stage == "queue"]
+    assert len(queue_logs) == 1
+    assert queue_logs[0].meta["memory_quality_controller_enabled"] is True
+    assert queue_logs[0].meta["memory_quality_lookback_runs"] == 18
+    assert queue_logs[0].meta["memory_quality_min_folds"] == 3
 
 
 def test_orchestrator_memory_quality_controller_tightens_fold_parameters(

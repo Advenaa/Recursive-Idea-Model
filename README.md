@@ -182,10 +182,12 @@ rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65
 rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval train-rl-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
+rim eval train-rl-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3
 # autolearn updates depth/specialist/arbitration/spawn/memory policy files under rim/eval/policies by default
 # specialist policy includes contract-controller defaults
 # spawn policy can include specialist outcome-informed role boosts + dynamic token routing/tool contracts
+# memory policy can include memory-quality-controller defaults under RL autolearn
 ```
 
 Provider env vars:
@@ -233,7 +235,9 @@ export RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO=0.5
 export RIM_ENABLE_MEMORY_QUALITY_CONTROLLER=1
 export RIM_MEMORY_QUALITY_LOOKBACK_RUNS=24
 export RIM_MEMORY_QUALITY_MIN_FOLDS=4
-# Optional trained memory policy file from `rim eval train-memory-policy` output
+# Optional trained memory policy file from `rim eval train-memory-policy` or
+# `rim eval train-rl-memory-policy` output. This policy can also carry
+# memory-quality-controller defaults.
 export RIM_MEMORY_POLICY_PATH=rim/eval/policies/memory_policy.json
 export RIM_ENABLE_DISAGREEMENT_ARBITRATION=1
 export RIM_ARBITRATION_MAX_JOBS=2

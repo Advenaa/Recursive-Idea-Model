@@ -301,6 +301,9 @@ def _load_memory_policy_env(path_value: str) -> tuple[dict[str, object], str | N
         "RIM_MEMORY_FOLD_MAX_ENTRIES",
         "RIM_MEMORY_FOLD_NOVELTY_FLOOR",
         "RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO",
+        "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER",
+        "RIM_MEMORY_QUALITY_LOOKBACK_RUNS",
+        "RIM_MEMORY_QUALITY_MIN_FOLDS",
     }
     filtered = {key: value for key, value in env.items() if key in allowed}
     if not filtered:
@@ -576,6 +579,9 @@ class RimExecutionEngine:
             memory_fold_max_entries_default = 12
             memory_fold_novelty_floor_default = 0.35
             memory_fold_max_duplicate_ratio_default = 0.5
+            memory_quality_controller_enabled_default = request.mode == "deep"
+            memory_quality_lookback_runs_default = 24
+            memory_quality_min_folds_default = 4
             if memory_policy_env:
                 memory_folding_default = _coerce_bool(
                     memory_policy_env.get("RIM_ENABLE_MEMORY_FOLDING"),
@@ -599,19 +605,35 @@ class RimExecutionEngine:
                     lower=0.0,
                     upper=1.0,
                 )
+                memory_quality_controller_enabled_default = _coerce_bool(
+                    memory_policy_env.get("RIM_ENABLE_MEMORY_QUALITY_CONTROLLER"),
+                    memory_quality_controller_enabled_default,
+                )
+                memory_quality_lookback_runs_default = _coerce_int(
+                    memory_policy_env.get("RIM_MEMORY_QUALITY_LOOKBACK_RUNS"),
+                    memory_quality_lookback_runs_default,
+                    lower=1,
+                    upper=500,
+                )
+                memory_quality_min_folds_default = _coerce_int(
+                    memory_policy_env.get("RIM_MEMORY_QUALITY_MIN_FOLDS"),
+                    memory_quality_min_folds_default,
+                    lower=1,
+                    upper=200,
+                )
             memory_quality_controller_enabled = _parse_bool_env(
                 "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER",
-                request.mode == "deep",
+                memory_quality_controller_enabled_default,
             )
             memory_quality_lookback_runs = _parse_int_env(
                 "RIM_MEMORY_QUALITY_LOOKBACK_RUNS",
-                24,
+                memory_quality_lookback_runs_default,
                 lower=1,
                 upper=500,
             )
             memory_quality_min_folds = _parse_int_env(
                 "RIM_MEMORY_QUALITY_MIN_FOLDS",
-                4,
+                memory_quality_min_folds_default,
                 lower=1,
                 upper=200,
             )

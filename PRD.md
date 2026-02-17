@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn + engine modularization increments): `150` passing tests (`pytest -q`, February 17, 2026)
+- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn/memory + engine modularization increments): `152` passing tests (`pytest -q`, February 17, 2026)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -266,6 +266,7 @@ Each run must return JSON with this minimum schema:
 - Add telemetry-driven specialist contract controller that adjusts spawn role boosts from recent specialist arbitration outcomes (`RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER`, lookback/min-round/min-role thresholds) and threads adjustments into specialization spawn (`adaptive_role_boosts`) (done on February 17, 2026)
 - Add offline/online policy-loop integration for specialist contract control and outcome-informed spawn role boosts: specialist policy now carries controller defaults and spawn policy training consumes specialist role outcome telemetry (`specialist_role_action_counts`, `specialist_role_avg_match_score`) (done on February 17, 2026)
 - Add learned dynamic spawn token contracts (`RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS`) so spawn policy training can persist token-level routing/tool contracts from successful dynamic specialists and runtime spawning can reuse them (done on February 17, 2026)
+- Add RL memory policy credit-assignment loop (`rim eval train-rl-memory-policy`) and RL autolearn integration so memory policies can learn fold/controller defaults from run-level memory degradation telemetry (`memory_fold_*`, `memory_quality_controller_*`) (done on February 17, 2026)
 
 ## 20) SOTA Alignment Status (vs `rim_paper_4.docx`)
 
@@ -296,11 +297,12 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Telemetry-driven specialist contract controller that learns role-level boost adjustments from recent arbitration outcomes and applies those adjustments to runtime spawn scoring.
 - Eval/autolearn policy integration for specialist contract control and spawn adaptation: specialist policy can now load/save controller defaults, and spawn policy calibration/RL training consume specialist role outcome telemetry to update role boosts.
 - Dynamic specialist contract learning in spawn policy loops: calibration/RL training now derive token-level routing/tool contracts for dynamic roles (`RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS`), and runtime spawn planning applies them before generic dynamic defaults.
+- RL memory policy loop with controller-default learning: `train-rl-memory-policy` and RL autolearn now optimize fold + memory-quality-controller settings from run telemetry and can persist controller defaults in memory policy artifacts.
 
 ### 20.2 Partially Implemented
 
 - Learning layer:
-  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version/degradation telemetry, offline memory-policy training (`rim eval train-memory-policy`), runtime policy loading (`RIM_MEMORY_POLICY_PATH`), autolearn-driven online policy refresh (`rim eval autolearn`), and runtime long-horizon fold guardrails from recent telemetry (`RIM_ENABLE_MEMORY_QUALITY_CONTROLLER`, `RIM_MEMORY_QUALITY_LOOKBACK_RUNS`, `RIM_MEMORY_QUALITY_MIN_FOLDS`); no fully learned memory quality meta-model for decomposition/challenge/synthesis policy updates yet.
+  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version/degradation telemetry, offline memory-policy training (`rim eval train-memory-policy`), RL-style memory credit assignment training (`rim eval train-rl-memory-policy`), runtime policy loading (`RIM_MEMORY_POLICY_PATH`), autolearn-driven online policy refresh (`rim eval autolearn` with blend/RL paths), and runtime long-horizon fold guardrails from recent telemetry (`RIM_ENABLE_MEMORY_QUALITY_CONTROLLER`, `RIM_MEMORY_QUALITY_LOOKBACK_RUNS`, `RIM_MEMORY_QUALITY_MIN_FOLDS`); no fully learned memory quality meta-model for decomposition/challenge/synthesis policy updates yet.
 - Orchestration depth/breadth policy:
   recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration/training (`rim eval calibrate`, `rim eval train-policy`), automated online update loop (`rim eval autolearn` with `RIM_DEPTH_POLICY_PATH`), and RL-style reward/advantage credit assignment (`rim eval train-rl-policy`) available; full PARL/ARPO/AEPO-grade policy optimization is still missing.
 - Challenge reconciliation:

@@ -30,6 +30,7 @@ from rim.eval.runner import (
     train_depth_policy,
     train_memory_policy,
     train_rl_depth_and_arbitration_policies,
+    train_rl_memory_policy,
     train_rl_spawn_policy,
     train_spawn_policy,
     train_specialist_arbitration_policy,
@@ -538,6 +539,29 @@ def _cmd_eval_train_rl_spawn_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_eval_train_rl_memory_policy(args: argparse.Namespace) -> int:
+    report_paths = _resolve_train_policy_reports(args)
+    reports = [load_report(path) for path in report_paths]
+    policy = train_rl_memory_policy(
+        reports,
+        target_quality=args.target_quality,
+        target_runtime_sec=args.target_runtime_sec,
+        learning_rate=args.learning_rate,
+        epochs=args.epochs,
+        reward_runtime_weight=args.reward_runtime_weight,
+        reward_failure_penalty=args.reward_failure_penalty,
+    )
+    payload = {
+        "report_count": len(report_paths),
+        "report_paths": [str(path) for path in report_paths],
+        "policy": policy,
+    }
+    if args.save:
+        Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 async def _cmd_eval_calibrate_loop(args: argparse.Namespace) -> int:
     orchestrator = _build_orchestrator()
     dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
@@ -787,6 +811,19 @@ def build_parser() -> argparse.ArgumentParser:
     eval_train_rl_spawn_policy.add_argument("--reward-runtime-weight", type=float, default=0.35)
     eval_train_rl_spawn_policy.add_argument("--reward-failure-penalty", type=float, default=1.0)
     eval_train_rl_spawn_policy.add_argument("--save")
+    eval_train_rl_memory_policy = eval_sub.add_parser(
+        "train-rl-memory-policy",
+        help="Train RL-style memory fold policy updates with degradation/runtime reward credit assignment",
+    )
+    eval_train_rl_memory_policy.add_argument("--reports", help="comma-separated report paths")
+    eval_train_rl_memory_policy.add_argument("--reports-dir")
+    eval_train_rl_memory_policy.add_argument("--target-quality", type=float, default=0.65)
+    eval_train_rl_memory_policy.add_argument("--target-runtime-sec", type=float)
+    eval_train_rl_memory_policy.add_argument("--learning-rate", type=float, default=0.18)
+    eval_train_rl_memory_policy.add_argument("--epochs", type=int, default=3)
+    eval_train_rl_memory_policy.add_argument("--reward-runtime-weight", type=float, default=0.35)
+    eval_train_rl_memory_policy.add_argument("--reward-failure-penalty", type=float, default=1.0)
+    eval_train_rl_memory_policy.add_argument("--save")
     eval_autolearn = eval_sub.add_parser(
         "autolearn",
         help="Run benchmark iterations and auto-update depth + arbitration + specialist + spawn + memory policies from fresh telemetry",
@@ -881,6 +918,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_train_rl_policy(args))
     if args.command == "eval" and args.eval_command == "train-rl-spawn-policy":
         raise SystemExit(_cmd_eval_train_rl_spawn_policy(args))
+    if args.command == "eval" and args.eval_command == "train-rl-memory-policy":
+        raise SystemExit(_cmd_eval_train_rl_memory_policy(args))
     if args.command == "eval" and args.eval_command == "autolearn":
         raise SystemExit(asyncio.run(_cmd_eval_autolearn(args)))
     if args.command == "health":
