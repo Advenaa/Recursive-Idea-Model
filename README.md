@@ -187,7 +187,7 @@ rim eval train-rl-orchestration-policy --reports-dir rim/eval/reports --target-q
 rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3
 # autolearn updates depth/specialist/arbitration/spawn/memory policy files under rim/eval/policies by default
 # specialist policy includes contract-controller defaults
-# spawn policy can include specialist outcome-informed role boosts + dynamic token routing/tool contracts
+# spawn policy can include specialist outcome-informed role boosts + dynamic token boosts + token/default routing/tool contracts
 # memory policy can include memory-quality-controller defaults under RL autolearn
 ```
 

@@ -775,6 +775,8 @@ def test_train_spawn_policy_aggregates_reports() -> None:
     assert "RIM_ENABLE_DYNAMIC_SPECIALISTS" in env
     assert "RIM_SPAWN_ROLE_BOOSTS" in env
     assert "security" in env["RIM_SPAWN_ROLE_BOOSTS"]
+    assert "RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS" in env
+    assert "aodkinv" in env["RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS"]
     assert "RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS" in env
     assert "aodkinv" in env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"]
     assert "RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT" in env

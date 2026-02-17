@@ -2615,6 +2615,7 @@ def calibrate_spawn_policy(
     role_stats_raw = telemetry.get("role_stats")
     role_stats = role_stats_raw if isinstance(role_stats_raw, dict) else {}
     role_boosts: dict[str, float] = {}
+    dynamic_token_boosts: dict[str, float] = {}
     dynamic_contracts: dict[str, dict[str, Any]] = {}
     dynamic_default_contract: dict[str, Any] = {}
     dynamic_default_score = 0.0
@@ -2650,6 +2651,14 @@ def calibrate_spawn_policy(
         if selected_count < 1:
             continue
         avg_run_quality = _clamp_float(_to_float(stats.get("avg_run_quality"), 0.0), 0.0, 1.0)
+        support_signal = 0.1 * _clamp_float(float(selected_count), 0.0, 8.0)
+        token_boost = _clamp_float(
+            ((avg_run_quality - float(target_quality)) * 3.2) + support_signal,
+            -4.0,
+            4.0,
+        )
+        if abs(token_boost) >= 0.05:
+            dynamic_token_boosts[token] = round(token_boost, 4)
         if avg_run_quality < max(0.0, float(target_quality) - 0.12):
             continue
         contract = _normalize_dynamic_contract(stats)
@@ -2677,6 +2686,8 @@ def calibrate_spawn_policy(
         rationale.append("Failure rate is elevated; policy avoids aggressive specialist expansion.")
     if role_boosts:
         rationale.append("Specialist arbitration outcomes provide role-level signals for spawn role boosts.")
+    if dynamic_token_boosts:
+        rationale.append("Dynamic token-level spawn score boosts were learned from run outcomes.")
     if dynamic_contracts:
         rationale.append("Dynamic specialist routing/tools were learned from successful token-level runs.")
     if dynamic_default_contract:
@@ -2691,6 +2702,8 @@ def calibrate_spawn_policy(
     }
     if role_boosts:
         recommended_env["RIM_SPAWN_ROLE_BOOSTS"] = role_boosts
+    if dynamic_token_boosts:
+        recommended_env["RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS"] = dynamic_token_boosts
     if dynamic_contracts:
         recommended_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = dynamic_contracts
     if dynamic_default_contract:
@@ -2755,6 +2768,8 @@ def train_spawn_policy(
     }
     role_boost_weighted: dict[str, float] = {}
     role_boost_total_weight: dict[str, float] = {}
+    dynamic_token_boost_weighted: dict[str, float] = {}
+    dynamic_token_boost_total_weight: dict[str, float] = {}
     dynamic_contract_votes: dict[str, dict[str, float]] = {}
     dynamic_contract_payloads: dict[str, dict[str, dict[str, Any]]] = {}
     dynamic_default_contract_votes: dict[str, float] = {}
@@ -2804,6 +2819,16 @@ def train_spawn_policy(
         for role, boost in role_boosts.items():
             role_boost_weighted[role] = role_boost_weighted.get(role, 0.0) + (boost * weight)
             role_boost_total_weight[role] = role_boost_total_weight.get(role, 0.0) + weight
+        dynamic_token_boosts = _normalize_float_map(
+            env.get("RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS")
+        )
+        for token, boost in dynamic_token_boosts.items():
+            dynamic_token_boost_weighted[token] = (
+                dynamic_token_boost_weighted.get(token, 0.0) + (boost * weight)
+            )
+            dynamic_token_boost_total_weight[token] = (
+                dynamic_token_boost_total_weight.get(token, 0.0) + weight
+            )
         dynamic_contracts = _normalize_dynamic_contract_map(
             env.get("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS")
         )
@@ -2884,6 +2909,15 @@ def train_spawn_policy(
         if abs(blended) < 0.05:
             continue
         role_boosts_final[role] = round(_clamp_float(blended, -4.0, 4.0), 4)
+    dynamic_token_boosts_final: dict[str, float] = {}
+    for token in sorted(dynamic_token_boost_weighted):
+        denominator = dynamic_token_boost_total_weight.get(token, 0.0)
+        if denominator <= 0.0:
+            continue
+        blended = dynamic_token_boost_weighted[token] / denominator
+        if abs(blended) < 0.05:
+            continue
+        dynamic_token_boosts_final[token] = round(_clamp_float(blended, -4.0, 4.0), 4)
     dynamic_contracts_final: dict[str, dict[str, Any]] = {}
     for token in sorted(dynamic_contract_votes):
         votes = dynamic_contract_votes.get(token, {})
@@ -2905,6 +2939,8 @@ def train_spawn_policy(
             dynamic_default_contract_final = contract
     if role_boosts_final:
         policy_env["RIM_SPAWN_ROLE_BOOSTS"] = role_boosts_final
+    if dynamic_token_boosts_final:
+        policy_env["RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS"] = dynamic_token_boosts_final
     if dynamic_contracts_final:
         policy_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = dynamic_contracts_final
     if dynamic_default_contract_final:
@@ -2929,6 +2965,8 @@ def train_spawn_policy(
         rationale.append("Disagreement/dynamic-role pressure supports more adaptive specialist spawning.")
     if role_boosts_final:
         rationale.append("Specialist arbitration role outcomes contributed weighted spawn role-boost updates.")
+    if dynamic_token_boosts_final:
+        rationale.append("Dynamic token-level spawn score boosts were preserved from weighted run outcomes.")
     if dynamic_contracts_final:
         rationale.append("Dynamic token routing/tool contracts were preserved from weighted run outcomes.")
     if dynamic_default_contract_final:
