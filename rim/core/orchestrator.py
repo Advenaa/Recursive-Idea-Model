@@ -239,6 +239,29 @@ def _load_specialist_policy_env(path_value: str) -> tuple[dict[str, object], str
     return filtered, None
 
 
+def _load_arbitration_policy_env(path_value: str) -> tuple[dict[str, object], str | None]:
+    path = str(path_value or "").strip()
+    if not path:
+        return {}, None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.loads(handle.read())
+    except Exception as exc:  # noqa: BLE001
+        return {}, str(exc)
+    env = _extract_policy_env(payload)
+    allowed = {
+        "RIM_ENABLE_DISAGREEMENT_ARBITRATION",
+        "RIM_ARBITRATION_MAX_JOBS",
+        "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION",
+        "RIM_DEVILS_ADVOCATE_ROUNDS",
+        "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE",
+    }
+    filtered = {key: value for key, value in env.items() if key in allowed}
+    if not filtered:
+        return {}, "No arbitration keys found in policy file."
+    return filtered, None
+
+
 def _load_depth_policy_env(path_value: str) -> tuple[dict[str, object], str | None]:
     path = str(path_value or "").strip()
     if not path:
@@ -576,29 +599,68 @@ class RimOrchestrator:
                 lower=0.0,
                 upper=1.0,
             )
+            arbitration_policy_path = str(os.getenv("RIM_ARBITRATION_POLICY_PATH", "")).strip()
+            arbitration_policy_env: dict[str, object] = {}
+            arbitration_policy_error: str | None = None
+            if arbitration_policy_path:
+                arbitration_policy_env, arbitration_policy_error = _load_arbitration_policy_env(
+                    arbitration_policy_path
+                )
+            arbitration_enabled_default = request.mode == "deep"
+            arbitration_max_jobs_default = 2
+            devils_advocate_enabled_default = request.mode == "deep"
+            devils_advocate_rounds_default = 1
+            devils_advocate_min_confidence_default = 0.72
+            if arbitration_policy_env:
+                arbitration_enabled_default = _coerce_bool(
+                    arbitration_policy_env.get("RIM_ENABLE_DISAGREEMENT_ARBITRATION"),
+                    arbitration_enabled_default,
+                )
+                arbitration_max_jobs_default = _coerce_int(
+                    arbitration_policy_env.get("RIM_ARBITRATION_MAX_JOBS"),
+                    arbitration_max_jobs_default,
+                    lower=0,
+                    upper=6,
+                )
+                devils_advocate_enabled_default = _coerce_bool(
+                    arbitration_policy_env.get("RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION"),
+                    devils_advocate_enabled_default,
+                )
+                devils_advocate_rounds_default = _coerce_int(
+                    arbitration_policy_env.get("RIM_DEVILS_ADVOCATE_ROUNDS"),
+                    devils_advocate_rounds_default,
+                    lower=0,
+                    upper=3,
+                )
+                devils_advocate_min_confidence_default = _coerce_float(
+                    arbitration_policy_env.get("RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE"),
+                    devils_advocate_min_confidence_default,
+                    lower=0.0,
+                    upper=1.0,
+                )
             enable_arbitration = _parse_bool_env(
                 "RIM_ENABLE_DISAGREEMENT_ARBITRATION",
-                request.mode == "deep",
+                arbitration_enabled_default,
             )
             arbitration_max_jobs = _parse_int_env(
                 "RIM_ARBITRATION_MAX_JOBS",
-                2,
+                arbitration_max_jobs_default,
                 lower=0,
                 upper=6,
             )
             enable_devils_advocate_arbitration = _parse_bool_env(
                 "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION",
-                request.mode == "deep",
+                devils_advocate_enabled_default,
             )
             devils_advocate_rounds = _parse_int_env(
                 "RIM_DEVILS_ADVOCATE_ROUNDS",
-                1,
+                devils_advocate_rounds_default,
                 lower=0,
                 upper=3,
             )
             devils_advocate_min_confidence = _parse_float_env(
                 "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE",
-                0.72,
+                devils_advocate_min_confidence_default,
                 lower=0.0,
                 upper=1.0,
             )
@@ -659,6 +721,9 @@ class RimOrchestrator:
                     "memory_policy_applied": bool(memory_policy_env),
                     "memory_policy_path": memory_policy_path or None,
                     "memory_policy_error": memory_policy_error,
+                    "arbitration_policy_applied": bool(arbitration_policy_env),
+                    "arbitration_policy_path": arbitration_policy_path or None,
+                    "arbitration_policy_error": arbitration_policy_error,
                     "specialist_policy_applied": bool(specialist_policy_env),
                     "specialist_policy_path": specialist_policy_path or None,
                     "specialist_policy_error": specialist_policy_error,
@@ -740,12 +805,31 @@ class RimOrchestrator:
                     domain=request.domain,
                     extra_critics=spawned_extra_critics,
                 )
+                critic_parse_failures = len(
+                    [
+                        item
+                        for item in findings
+                        if item.issue == "Critic stage failed to parse a valid response."
+                    ]
+                )
+                critic_execution_failures = len(
+                    [
+                        item
+                        for item in findings
+                        if item.issue == "Critic stage execution failed."
+                    ]
+                )
                 self.repository.log_stage(
                     run_id=run_id,
                     stage="challenge_parallel",
                     status="completed",
                     latency_ms=int((time.perf_counter() - challenge_started) * 1000),
-                    meta={"cycle": cycle, "finding_count": len(findings)},
+                    meta={
+                        "cycle": cycle,
+                        "finding_count": len(findings),
+                        "critic_parse_failures": critic_parse_failures,
+                        "critic_execution_failures": critic_execution_failures,
+                    },
                 )
                 reconciliation = reconcile_findings(
                     findings,
@@ -815,6 +899,8 @@ class RimOrchestrator:
                                     arbitration_max_jobs,
                                     int(reconciliation["summary"]["disagreement_count"]),
                                 ),
+                                "disagreement_arbitration_enabled": enable_arbitration,
+                                "arbitration_max_jobs": arbitration_max_jobs,
                                 "resolved_count": len(arbitrations),
                                 "devils_advocate_enabled": enable_devils_advocate_arbitration,
                                 "devils_advocate_rounds": (
@@ -824,6 +910,9 @@ class RimOrchestrator:
                                 ),
                                 "devils_advocate_min_confidence": devils_advocate_min_confidence,
                                 "devils_advocate_count": devils_advocate_count,
+                                "arbitration_policy_applied": bool(arbitration_policy_env),
+                                "arbitration_policy_path": arbitration_policy_path or None,
+                                "arbitration_policy_error": arbitration_policy_error,
                                 "specialist_loop_enabled": enable_specialist_arbitration_loop,
                                 "specialist_max_jobs": specialist_arbitration_max_jobs,
                                 "specialist_min_confidence": specialist_arbitration_min_confidence,
@@ -841,6 +930,8 @@ class RimOrchestrator:
                             latency_ms=int((time.perf_counter() - arbitration_started) * 1000),
                             meta={
                                 "cycle": cycle,
+                                "disagreement_arbitration_enabled": enable_arbitration,
+                                "arbitration_max_jobs": arbitration_max_jobs,
                                 "devils_advocate_enabled": enable_devils_advocate_arbitration,
                                 "devils_advocate_rounds": (
                                     devils_advocate_rounds
@@ -848,6 +939,9 @@ class RimOrchestrator:
                                     else 0
                                 ),
                                 "devils_advocate_min_confidence": devils_advocate_min_confidence,
+                                "arbitration_policy_applied": bool(arbitration_policy_env),
+                                "arbitration_policy_path": arbitration_policy_path or None,
+                                "arbitration_policy_error": arbitration_policy_error,
                                 "specialist_loop_enabled": enable_specialist_arbitration_loop,
                                 "specialist_max_jobs": specialist_arbitration_max_jobs,
                                 "specialist_min_confidence": specialist_arbitration_min_confidence,

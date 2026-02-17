@@ -119,6 +119,26 @@ def test_queue_retry_rejects_non_retryable_status(tmp_path: Path) -> None:
         assert "not retryable" in str(exc)
 
 
+def test_queue_retry_rejects_missing_request_payload(tmp_path: Path) -> None:
+    repo = RunRepository(db_path=tmp_path / "rim_run_retry_missing_request.db")
+    repo.create_run_with_request(
+        run_id="run-missing-request",
+        mode="deep",
+        input_idea="idea",
+        request_json=None,
+        status="failed",
+    )
+    queue = RunJobQueue(
+        orchestrator=RimOrchestrator(repository=repo, router=ProviderRouter()),
+        repository=repo,
+    )
+    try:
+        asyncio.run(queue.retry("run-missing-request"))
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "request payload is missing or invalid" in str(exc)
+
+
 def test_api_cancel_and_retry_controls(tmp_path: Path) -> None:
     repo = RunRepository(db_path=tmp_path / "rim_api_run_controls.db")
     repo.create_run_with_request(

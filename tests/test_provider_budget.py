@@ -162,6 +162,26 @@ def test_run_budget_enforced() -> None:
         asyncio.run(session.invoke_json("decompose", "y"))
 
 
+def test_remaining_budget_snapshot() -> None:
+    session = ProviderRunSession(
+        run_id="run-budget-snapshot",
+        providers={"codex": FakeAdapter()},
+        stage_policy={"decompose": ["codex"]},
+        timeout_sec=60,
+        budget=RunBudget(
+            max_calls=3,
+            max_latency_ms=100,
+            max_tokens=100,
+            max_estimated_cost_usd=10.0,
+        ),
+    )
+    asyncio.run(session.invoke_json("decompose", "x"))
+    remaining = session.get_remaining_budget()
+    assert remaining["calls"] == 2
+    assert remaining["latency_ms"] == 90
+    assert remaining["tokens"] > 0
+
+
 def test_json_repair_retry_before_fallback() -> None:
     flaky = FlakyJsonAdapter()
     backup = SuccessJsonAdapter(provider_name="claude")

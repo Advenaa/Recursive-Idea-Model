@@ -154,27 +154,28 @@ Environment variables:
 46. `RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION` default `1` in deep mode (run follow-up devil's-advocate arbitration on low-confidence/escalated decisions)
 47. `RIM_DEVILS_ADVOCATE_ROUNDS` default `1` (max devil's-advocate rounds per cycle)
 48. `RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE` default `0.72` (minimum arbitration confidence before triggering devil follow-up)
-49. `RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP` default `1` in deep mode (run specialist arbitration on diversity-flagged disagreements)
-50. `RIM_SPECIALIST_ARBITRATION_MAX_JOBS` default `2` (max specialist arbitration reviews per cycle)
-51. `RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE` default `0.78` (minimum arbitration confidence before specialist follow-up)
-52. `RIM_SPECIALIST_POLICY_PATH` optional JSON policy file from `rim eval train-specialist-policy` (applies specialist arbitration defaults before env overrides)
-53. `RIM_ENABLE_EXECUTABLE_VERIFICATION` default `1` in deep mode (run safe executable checks from prefixed constraints)
-54. `RIM_EXEC_VERIFY_MAX_CHECKS` default `5` (max executable constraint checks per cycle)
-55. `RIM_ENABLE_PYTHON_EXEC_CHECKS` default `0` (allow `python_exec:` subprocess checks)
-56. `RIM_PYTHON_EXEC_TIMEOUT_SEC` default `2` (timeout per `python_exec:` check)
-57. `RIM_ENABLE_ADVANCED_VERIFICATION` default `1` in deep mode (run solver/simulation/data-backed verification)
-58. `RIM_ADV_VERIFY_MAX_CHECKS` default `4` (max advanced verification checks per cycle)
-59. `RIM_ADV_VERIFY_SIMULATION_TRIALS` default `200` (Monte Carlo samples per simulation check)
-60. `RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE` default `0.7` (minimum simulation pass-rate threshold)
-61. `RIM_ADV_VERIFY_SIMULATION_SEED` default `42` (deterministic simulation seed)
-62. `RIM_ADV_VERIFY_DATA_PATH` default `rim/eval/data/benchmark_ideas.jsonl` (local reference dataset path for `data:` checks)
-63. `RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC` default `8` (timeout for optional external advanced-verification adapters)
-64. `RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD` optional command (external backend for `solver:` checks)
-65. `RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD` optional command (external backend for `simulate:` checks)
-66. `RIM_ADV_VERIFY_EXTERNAL_DATA_CMD` optional command (external backend for `data:` checks)
-67. Reference adapter template: `scripts/advanced_verify_adapter.py` (stdin JSON -> stdout JSON contract)
-68. Optional adapter env: `RIM_ADV_VERIFY_ADAPTER_SOLVER_BACKEND=z3` (use z3 backend when available, fallback otherwise)
-69. `RIM_DEPTH_POLICY_PATH` optional JSON policy file (recommended output from `rim eval autolearn`) that applies depth-allocator defaults before env overrides
+49. `RIM_ARBITRATION_POLICY_PATH` optional JSON policy file from `rim eval train-arbitration-policy` / `rim eval autolearn` (applies disagreement/devil's-advocate defaults before env overrides)
+50. `RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP` default `1` in deep mode (run specialist arbitration on diversity-flagged disagreements)
+51. `RIM_SPECIALIST_ARBITRATION_MAX_JOBS` default `2` (max specialist arbitration reviews per cycle)
+52. `RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE` default `0.78` (minimum arbitration confidence before specialist follow-up)
+53. `RIM_SPECIALIST_POLICY_PATH` optional JSON policy file from `rim eval train-specialist-policy` (applies specialist arbitration defaults before env overrides)
+54. `RIM_ENABLE_EXECUTABLE_VERIFICATION` default `1` in deep mode (run safe executable checks from prefixed constraints)
+55. `RIM_EXEC_VERIFY_MAX_CHECKS` default `5` (max executable constraint checks per cycle)
+56. `RIM_ENABLE_PYTHON_EXEC_CHECKS` default `0` (allow `python_exec:` subprocess checks)
+57. `RIM_PYTHON_EXEC_TIMEOUT_SEC` default `2` (timeout per `python_exec:` check)
+58. `RIM_ENABLE_ADVANCED_VERIFICATION` default `1` in deep mode (run solver/simulation/data-backed verification)
+59. `RIM_ADV_VERIFY_MAX_CHECKS` default `4` (max advanced verification checks per cycle)
+60. `RIM_ADV_VERIFY_SIMULATION_TRIALS` default `200` (Monte Carlo samples per simulation check)
+61. `RIM_ADV_VERIFY_SIMULATION_MIN_PASS_RATE` default `0.7` (minimum simulation pass-rate threshold)
+62. `RIM_ADV_VERIFY_SIMULATION_SEED` default `42` (deterministic simulation seed)
+63. `RIM_ADV_VERIFY_DATA_PATH` default `rim/eval/data/benchmark_ideas.jsonl` (local reference dataset path for `data:` checks)
+64. `RIM_ADV_VERIFY_EXTERNAL_TIMEOUT_SEC` default `8` (timeout for optional external advanced-verification adapters)
+65. `RIM_ADV_VERIFY_EXTERNAL_SOLVER_CMD` optional command (external backend for `solver:` checks)
+66. `RIM_ADV_VERIFY_EXTERNAL_SIMULATION_CMD` optional command (external backend for `simulate:` checks)
+67. `RIM_ADV_VERIFY_EXTERNAL_DATA_CMD` optional command (external backend for `data:` checks)
+68. Reference adapter template: `scripts/advanced_verify_adapter.py` (stdin JSON -> stdout JSON contract)
+69. Optional adapter env: `RIM_ADV_VERIFY_ADAPTER_SOLVER_BACKEND=z3` (use z3 backend when available, fallback otherwise)
+70. `RIM_DEPTH_POLICY_PATH` optional JSON policy file (recommended output from `rim eval autolearn`) that applies depth-allocator defaults before env overrides
 
 ## 5) Modes and Runtime Controls
 
@@ -412,18 +413,21 @@ Additional eval commands:
 1. `rim eval list` for saved report history.
 2. `rim eval compare --base <report_a> --target <report_b>` for time-over-time deltas (defaults to latest two reports when omitted).
 3. `rim eval baseline --limit 10 --save baseline.json` for deterministic single-pass baseline outputs.
-4. `rim eval gate --base <report_a> --target <report_b> --min-quality-delta 0.0 --max-runtime-delta-sec 15` for pass/fail regression checks.
-5. `rim eval duel --mode deep --limit 10 --min-quality-delta 0.0` to run baseline + RIM benchmark and gate in one step.
-6. `rim eval blindpack --report <report.json> --limit 20 --save blind_review.json` to generate anonymized review packets.
-7. `rim eval calibrate --report <report.json> --target-quality 0.65 --target-runtime-sec 60` to recommend depth-allocator env settings from benchmark signals.
-8. `rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-runtime-sec 60` to run benchmark + calibration in one step.
-9. `rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate multiple reports into a depth-policy recommendation.
-10. `rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into specialist-arbitration policy defaults.
-11. `rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into specialization spawn-policy defaults.
-12. `rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into memory-fold policy defaults.
-13. `rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3` to run RL-style reward/advantage credit assignment and produce depth + specialist policy updates.
-14. `rim eval train-rl-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3` to run RL-style reward/advantage credit assignment and produce spawn role/tool policy updates.
-15. `rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3` to run benchmark cycles and auto-update depth + specialist + spawn + memory policies from fresh telemetry.
+4. `rim eval baseline-llm --provider claude --mode deep --limit 10 --save baseline_claude.json` for a normal single-call Claude baseline.
+5. `rim eval baseline-llm --provider codex --mode deep --limit 10 --save baseline_codex.json` for a normal single-call Codex baseline.
+6. `rim eval gate --base <report_a> --target <report_b> --min-quality-delta 0.0 --max-runtime-delta-sec 15` for pass/fail regression checks.
+7. `rim eval duel --mode deep --limit 10 --baseline-provider claude --min-quality-delta 0.0` to run single-call baseline + RIM benchmark and gate in one step (use `proxy` for legacy deterministic baseline).
+8. `rim eval blindpack --report <report.json> --limit 20 --save blind_review.json` to generate anonymized review packets.
+9. `rim eval calibrate --report <report.json> --target-quality 0.65 --target-runtime-sec 60` to recommend depth-allocator env settings from benchmark signals.
+10. `rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-runtime-sec 60` to run benchmark + calibration in one step.
+11. `rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate multiple reports into a depth-policy recommendation.
+12. `rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into specialist-arbitration policy defaults.
+13. `rim eval train-arbitration-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into disagreement/devil's-advocate arbitration policy defaults.
+14. `rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into specialization spawn-policy defaults.
+15. `rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60` to aggregate benchmark telemetry into memory-fold policy defaults.
+16. `rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3` to run RL-style reward/advantage credit assignment and produce depth + arbitration + specialist policy updates.
+17. `rim eval train-rl-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3` to run RL-style reward/advantage credit assignment and produce spawn role/tool policy updates.
+18. `rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3` to run benchmark cycles and auto-update depth + arbitration + specialist + spawn + memory policies from fresh telemetry.
 
 ## 9) Orchestration Logic
 

@@ -264,6 +264,17 @@ class ProviderRunSession:
             },
         }
 
+    def get_remaining_budget(self) -> dict[str, Any]:
+        return {
+            "calls": max(0, self.budget.max_calls - self.usage.calls),
+            "latency_ms": max(0, self.budget.max_latency_ms - self.usage.latency_ms),
+            "tokens": max(0, self.budget.max_tokens - self.usage.tokens),
+            "estimated_cost_usd": max(
+                0.0,
+                self.budget.max_estimated_cost_usd - self.usage.estimated_cost_usd,
+            ),
+        }
+
     async def _invoke_with_backoff(
         self,
         *,

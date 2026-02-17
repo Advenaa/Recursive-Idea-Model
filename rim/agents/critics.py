@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from rim.core.modes import ModeSettings
 from rim.core.schemas import CriticFinding, DecompositionNode
+from rim.providers.base import BudgetExceededError
 from rim.providers.router import ProviderRouter
 
 CRITIC_SCHEMA = {
@@ -51,6 +52,13 @@ FAST_CRITICS: list[tuple[str, str]] = [
 ]
 
 _DOMAIN_RE = re.compile(r"[^a-z0-9]+")
+_JSON_ERROR_MARKERS = (
+    "json",
+    "parse",
+    "schema",
+    "structured_output",
+    "no valid json object",
+)
 
 
 def _domain_slug(domain: str | None) -> str:
@@ -74,6 +82,87 @@ def _domain_critic_enabled() -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     return True
+
+
+def _parse_positive_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    try:
+        parsed = int(str(raw if raw is not None else default))
+    except (TypeError, ValueError):
+        return max(1, default)
+    return max(1, parsed)
+
+
+def _looks_like_json_error(exc: Exception) -> bool:
+    message = str(exc).strip().lower()
+    if not message:
+        return False
+    return any(marker in message for marker in _JSON_ERROR_MARKERS)
+
+
+def _resolve_job_limit(
+    *,
+    router: ProviderRouter,
+    total_jobs: int,
+) -> int:
+    configured_max = _parse_positive_int_env("RIM_MAX_CRITIC_JOBS_PER_CYCLE", 48)
+    limit = min(total_jobs, configured_max)
+    get_remaining_budget = getattr(router, "get_remaining_budget", None)
+    if not callable(get_remaining_budget):
+        return limit
+    try:
+        remaining = get_remaining_budget()
+    except Exception:  # noqa: BLE001
+        return limit
+    if not isinstance(remaining, dict):
+        return limit
+
+    remaining_calls = int(remaining.get("calls", limit) or 0)
+    limit = min(limit, max(0, remaining_calls))
+
+    remaining_latency_ms = int(remaining.get("latency_ms", 0) or 0)
+    reserve_latency_ms = _parse_positive_int_env(
+        "RIM_CRITIC_RESERVE_LATENCY_MS",
+        420_000,
+    )
+    est_latency_per_call_ms = _parse_positive_int_env(
+        "RIM_ESTIMATED_CRITIC_LATENCY_MS",
+        45_000,
+    )
+    if remaining_latency_ms > 0:
+        budget_for_critics = max(0, remaining_latency_ms - reserve_latency_ms)
+        latency_limited = budget_for_critics // est_latency_per_call_ms
+        if budget_for_critics > 0 and latency_limited == 0:
+            latency_limited = 1
+        limit = min(limit, max(0, latency_limited))
+    return max(0, limit)
+
+
+def _select_jobs_round_robin(
+    *,
+    nodes: list[DecompositionNode],
+    selected_critics: list[tuple[str, str]],
+    max_jobs: int,
+) -> list[tuple[DecompositionNode, str, str]]:
+    if max_jobs <= 0:
+        return []
+    buckets: list[list[tuple[DecompositionNode, str, str]]] = [
+        [(node, stage_name, critic_type) for stage_name, critic_type in selected_critics]
+        for node in nodes
+    ]
+    jobs: list[tuple[DecompositionNode, str, str]] = []
+    while len(jobs) < max_jobs:
+        progressed = False
+        for bucket in buckets:
+            if not bucket:
+                continue
+            jobs.append(bucket.pop(0))
+            progressed = True
+            if len(jobs) >= max_jobs:
+                break
+        if not progressed:
+            break
+    return jobs
 
 
 def _valid_severity(value: str) -> str:
@@ -133,7 +222,19 @@ async def run_critics(
             selected_critics.append(pair)
     if domain_stage is not None and _domain_critic_enabled() and domain_stage not in selected_critics:
         selected_critics.append(domain_stage)
-    max_parallel = int(os.getenv("RIM_MAX_PARALLEL_CRITICS", "6"))
+    total_jobs = len(nodes) * len(selected_critics)
+    if total_jobs == 0:
+        return []
+    job_limit = _resolve_job_limit(router=router, total_jobs=total_jobs)
+    critic_jobs = _select_jobs_round_robin(
+        nodes=nodes,
+        selected_critics=selected_critics,
+        max_jobs=job_limit,
+    )
+    if not critic_jobs:
+        return []
+    max_parallel = _parse_positive_int_env("RIM_MAX_PARALLEL_CRITICS", 6)
+    max_parallel = min(max_parallel, len(critic_jobs))
     semaphore = asyncio.Semaphore(max_parallel)
     findings: list[CriticFinding] = []
 
@@ -151,25 +252,34 @@ async def run_critics(
                     prompt,
                     json_schema=CRITIC_SCHEMA,
                 )
+                if not isinstance(payload, dict):
+                    raise ValueError("Critic stage returned non-object JSON payload.")
                 findings.append(_make_finding(node, critic_type, provider, payload))
-            except Exception:  # noqa: BLE001
+            except BudgetExceededError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                parse_like_error = _looks_like_json_error(exc)
                 findings.append(
                     CriticFinding(
                         id=str(uuid4()),
                         node_id=node.id,
                         critic_type=critic_type,
-                        issue="Critic stage failed to parse a valid response.",
-                        severity="high",
-                        confidence=0.2,
-                        suggested_fix="Retry this component with tighter JSON constraints.",
+                        issue=(
+                            "Critic stage failed to parse a valid response."
+                            if parse_like_error
+                            else "Critic stage execution failed."
+                        ),
+                        severity="high" if parse_like_error else "medium",
+                        confidence=0.2 if parse_like_error else 0.3,
+                        suggested_fix=(
+                            "Retry this component with tighter JSON constraints."
+                            if parse_like_error
+                            else "Retry this component and inspect provider CLI logs."
+                        ),
                         provider=None,
                     )
                 )
 
-    tasks = [
-        _job(node, stage_name, critic_type)
-        for node in nodes
-        for stage_name, critic_type in selected_critics
-    ]
+    tasks = [_job(node, stage_name, critic_type) for node, stage_name, critic_type in critic_jobs]
     await asyncio.gather(*tasks)
     return findings

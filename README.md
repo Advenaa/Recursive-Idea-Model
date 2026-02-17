@@ -115,7 +115,9 @@ rim run logs <run_id>
 rim run feedback <run_id> --verdict accept --notes "Strong output"
 rim eval run --mode deep --limit 3
 rim eval baseline --limit 3
-rim eval duel --mode deep --limit 3 --min-quality-delta 0.0
+rim eval baseline-llm --provider claude --mode deep --limit 3
+rim eval baseline-llm --provider codex --mode deep --limit 3
+rim eval duel --mode deep --limit 3 --baseline-provider claude --min-quality-delta 0.0
 rim eval list
 rim eval compare
 rim eval gate --min-quality-delta 0.0 --max-runtime-delta-sec 15
@@ -124,12 +126,13 @@ rim eval calibrate --target-quality 0.65 --target-runtime-sec 60
 rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-runtime-sec 60
 rim eval train-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-specialist-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
+rim eval train-arbitration-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-memory-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60
 rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval train-rl-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3
-# autolearn updates depth/specialist/spawn/memory policy files under rim/eval/policies by default
+# autolearn updates depth/specialist/arbitration/spawn/memory policy files under rim/eval/policies by default
 ```
 
 Provider env vars:
@@ -180,6 +183,8 @@ export RIM_ARBITRATION_MAX_JOBS=2
 export RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION=1
 export RIM_DEVILS_ADVOCATE_ROUNDS=1
 export RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE=0.72
+# Optional trained arbitration policy file from `rim eval train-arbitration-policy` output
+export RIM_ARBITRATION_POLICY_PATH=rim/eval/policies/arbitration_policy.json
 export RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP=1
 export RIM_SPECIALIST_ARBITRATION_MAX_JOBS=2
 export RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE=0.78

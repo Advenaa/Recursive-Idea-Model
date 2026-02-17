@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn increments): `115` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn increments): `118` passing tests (`pytest -q`)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -283,7 +283,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Orchestration depth/breadth policy:
   recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration/training (`rim eval calibrate`, `rim eval train-policy`), automated online update loop (`rim eval autolearn` with `RIM_DEPTH_POLICY_PATH`), and RL-style reward/advantage credit assignment (`rim eval train-rl-policy`) available; full PARL/ARPO/AEPO-grade policy optimization is still missing.
 - Challenge reconciliation:
-  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, specialist follow-up arbitration loops, benchmark telemetry capture, offline specialist-policy training/application (`rim eval train-specialist-policy` + `RIM_SPECIALIST_POLICY_PATH`), automated online specialist-policy updates (`rim eval autolearn`), and RL-style reward/advantage specialist credit assignment (`rim eval train-rl-policy`) are implemented; full multi-agent RL arbitration training remains missing.
+  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, specialist follow-up arbitration loops, benchmark telemetry capture, offline arbitration/specialist policy training (`rim eval train-arbitration-policy`, `rim eval train-specialist-policy` + `RIM_ARBITRATION_POLICY_PATH`, `RIM_SPECIALIST_POLICY_PATH`), automated online arbitration/specialist updates (`rim eval autolearn`), and RL-style reward/advantage arbitration + specialist credit assignment (`rim eval train-rl-policy`) are implemented; full multi-agent RL arbitration training remains missing.
 - Verification layer:
   deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, and baseline advanced adapters (`solver:`, `simulate:`, `data:`) are implemented, including pluggable external adapter command hooks; formal theorem/constraint tooling and production external integrations are still missing.
 - Specialization layer:

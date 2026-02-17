@@ -10,10 +10,58 @@ from typing import Any
 from rim.core.orchestrator import RimOrchestrator
 from rim.core.schemas import AnalyzeRequest, AnalyzeResult, DecompositionNode
 from rim.eval.benchmark import evaluate_run
+from rim.providers.router import ProviderRouter
 
 DEFAULT_DATASET_PATH = Path("rim/eval/data/benchmark_ideas.jsonl")
 DEFAULT_REPORTS_DIR = Path("rim/eval/reports")
 DEFAULT_POLICIES_DIR = Path("rim/eval/policies")
+
+SINGLE_CALL_LLM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "synthesized_idea": {"type": "string"},
+        "changes_summary": {"type": "array", "items": {"type": "string"}},
+        "residual_risks": {"type": "array", "items": {"type": "string"}},
+        "next_experiments": {"type": "array", "items": {"type": "string"}},
+        "confidence_score": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": [
+        "synthesized_idea",
+        "changes_summary",
+        "residual_risks",
+        "next_experiments",
+        "confidence_score",
+    ],
+}
+
+SINGLE_CALL_LLM_PROMPT = """You are a deep-thinking assistant.
+Solve this in one pass (no recursion or tool orchestration), then return STRICT JSON only:
+{{
+  "synthesized_idea": "string",
+  "changes_summary": ["string"],
+  "residual_risks": ["string"],
+  "next_experiments": ["string"],
+  "confidence_score": 0.0
+}}
+
+Domain:
+{domain}
+
+Idea:
+{idea}
+
+Constraints:
+{constraints}
+
+Desired outcome:
+{desired_outcome}
+
+Requirements:
+- Think deeply and cover tradeoffs.
+- Keep recommendations concrete and testable.
+- Include major residual risks honestly.
+- Output only one valid JSON object.
+"""
 
 
 def load_dataset(path: Path) -> list[dict[str, Any]]:
@@ -176,6 +224,79 @@ def _single_pass_baseline_result(idea: str, run_id: str) -> AnalyzeResult:
     )
 
 
+def _clean_list(value: Any, *, limit: int = 8) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned = [str(item).strip() for item in value if str(item).strip()]
+    return cleaned[:limit]
+
+
+def _normalize_single_call_payload(payload: dict[str, Any], idea: str) -> dict[str, Any]:
+    synthesized_idea = str(payload.get("synthesized_idea", "")).strip() or idea
+    confidence = _to_float(payload.get("confidence_score"), 0.5)
+    confidence = max(0.0, min(1.0, confidence))
+    return {
+        "synthesized_idea": synthesized_idea,
+        "changes_summary": _clean_list(payload.get("changes_summary"), limit=8),
+        "residual_risks": _clean_list(payload.get("residual_risks"), limit=8),
+        "next_experiments": _clean_list(payload.get("next_experiments"), limit=8),
+        "confidence_score": confidence,
+    }
+
+
+def _single_call_constraints(constraints: list[str] | None) -> str:
+    values = [str(item).strip() for item in list(constraints or []) if str(item).strip()]
+    if not values:
+        return "none"
+    return "\n".join(f"- {item}" for item in values[:10])
+
+
+def _single_call_baseline_prompt(request: AnalyzeRequest) -> str:
+    return SINGLE_CALL_LLM_PROMPT.format(
+        domain=request.domain or "general",
+        idea=request.idea,
+        constraints=_single_call_constraints(request.constraints),
+        desired_outcome=request.desired_outcome or "none",
+    )
+
+
+def _normalize_llm_provider(provider: str) -> str:
+    parsed = str(provider or "").strip().lower()
+    if parsed not in {"claude", "codex"}:
+        raise ValueError("provider must be one of: claude, codex")
+    return parsed
+
+
+async def _invoke_single_call_llm(
+    *,
+    router: Any,
+    run_id: str,
+    provider: str,
+    prompt: str,
+) -> tuple[dict[str, Any], str]:
+    stage = f"baseline_llm_{provider}"
+    session_factory = getattr(router, "create_session", None)
+    if callable(session_factory):
+        session = session_factory(run_id)
+        stage_policy = dict(getattr(session, "stage_policy", {}) or {})
+        stage_policy[stage] = [provider]
+        setattr(session, "stage_policy", stage_policy)
+        payload, selected_provider = await session.invoke_json(
+            stage,
+            prompt,
+            json_schema=SINGLE_CALL_LLM_SCHEMA,
+        )
+    else:
+        payload, selected_provider = await router.invoke_json(
+            stage,
+            prompt,
+            json_schema=SINGLE_CALL_LLM_SCHEMA,
+        )
+    if not isinstance(payload, dict):
+        raise ValueError("single-call baseline returned non-object JSON payload")
+    return payload, str(selected_provider or provider)
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -224,7 +345,13 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
         "disagreement_count": 0,
         "diversity_flagged_count": 0,
         "arbitration_resolved_count": 0,
+        "arbitration_jobs_requested_config": 0,
+        "arbitration_max_jobs_config": 0,
+        "disagreement_arbitration_enabled_config": False,
         "devils_advocate_count": 0,
+        "devils_advocate_enabled_config": False,
+        "devils_advocate_rounds_config": 0,
+        "devils_advocate_min_confidence_config": 0.0,
         "specialist_count": 0,
         "specialist_loop_enabled_config": False,
         "specialist_max_jobs_config": 0,
@@ -280,9 +407,33 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
                 telemetry["arbitration_resolved_count"],
                 _to_int(meta.get("resolved_count"), 0),
             )
+            telemetry["arbitration_jobs_requested_config"] = max(
+                telemetry["arbitration_jobs_requested_config"],
+                _to_int(meta.get("jobs_requested"), 0),
+            )
+            telemetry["arbitration_max_jobs_config"] = max(
+                telemetry["arbitration_max_jobs_config"],
+                _to_int(meta.get("arbitration_max_jobs"), 0),
+            )
+            telemetry["disagreement_arbitration_enabled_config"] = (
+                telemetry["disagreement_arbitration_enabled_config"]
+                or bool(meta.get("disagreement_arbitration_enabled", False))
+            )
             telemetry["devils_advocate_count"] = max(
                 telemetry["devils_advocate_count"],
                 _to_int(meta.get("devils_advocate_count"), 0),
+            )
+            telemetry["devils_advocate_enabled_config"] = (
+                telemetry["devils_advocate_enabled_config"]
+                or bool(meta.get("devils_advocate_enabled", False))
+            )
+            telemetry["devils_advocate_rounds_config"] = max(
+                telemetry["devils_advocate_rounds_config"],
+                _to_int(meta.get("devils_advocate_rounds"), 0),
+            )
+            telemetry["devils_advocate_min_confidence_config"] = max(
+                telemetry["devils_advocate_min_confidence_config"],
+                _to_float(meta.get("devils_advocate_min_confidence"), 0.0),
             )
             telemetry["specialist_count"] = max(
                 telemetry["specialist_count"],
@@ -546,6 +697,113 @@ def run_single_pass_baseline(
     )
 
 
+async def run_single_call_llm_baseline(
+    *,
+    dataset_path: Path = DEFAULT_DATASET_PATH,
+    provider: str = "claude",
+    mode: str = "deep",
+    limit: int | None = None,
+    router: Any | None = None,
+) -> dict[str, Any]:
+    selected_provider = _normalize_llm_provider(provider)
+    selected_mode = "deep" if str(mode).strip().lower() == "deep" else "fast"
+    active_router: Any = router if router is not None else ProviderRouter()
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    dataset = load_dataset(dataset_path)
+    if limit is not None and limit > 0:
+        dataset = dataset[:limit]
+
+    runs: list[dict[str, Any]] = []
+    started = time.perf_counter()
+
+    for item in dataset:
+        request = AnalyzeRequest(
+            idea=str(item["idea"]),
+            mode=selected_mode,
+            domain=item.get("domain"),
+            constraints=item.get("constraints") or [],
+            desired_outcome=item.get("desired_outcome"),
+        )
+        run_started = time.perf_counter()
+        item_id = str(item.get("id") or f"row-{len(runs) + 1}")
+        run_id = f"baseline-llm-{selected_provider}-{item_id}"
+        prompt = _single_call_baseline_prompt(request)
+        try:
+            raw_payload, used_provider = await _invoke_single_call_llm(
+                router=active_router,
+                run_id=run_id,
+                provider=selected_provider,
+                prompt=prompt,
+            )
+            synthesis = _normalize_single_call_payload(raw_payload, request.idea)
+            result = AnalyzeResult(
+                run_id=run_id,
+                mode=request.mode,
+                input_idea=request.idea,
+                decomposition=[
+                    DecompositionNode(
+                        depth=0,
+                        component_text=request.idea,
+                        node_type="claim",
+                        confidence=0.6,
+                    )
+                ],
+                critic_findings=[],
+                synthesized_idea=str(synthesis["synthesized_idea"]),
+                changes_summary=list(synthesis["changes_summary"]),
+                residual_risks=list(synthesis["residual_risks"]),
+                next_experiments=list(synthesis["next_experiments"]),
+                confidence_score=float(synthesis["confidence_score"]),
+            )
+            runtime_sec = round(time.perf_counter() - run_started, 3)
+            score = evaluate_run(result, heuristic_reviewer, domain=request.domain)
+            runs.append(
+                {
+                    "id": item.get("id"),
+                    "idea": request.idea,
+                    "domain": request.domain,
+                    "mode": f"single_call_{selected_provider}",
+                    "runtime_sec": runtime_sec,
+                    "run_id": result.run_id,
+                    "status": "completed",
+                    "provider": used_provider,
+                    "quality": score,
+                    "synthesized_idea": result.synthesized_idea,
+                    "changes_summary": list(result.changes_summary),
+                    "residual_risks": list(result.residual_risks),
+                    "next_experiments": list(result.next_experiments),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            runtime_sec = round(time.perf_counter() - run_started, 3)
+            runs.append(
+                {
+                    "id": item.get("id"),
+                    "idea": request.idea,
+                    "domain": request.domain,
+                    "mode": f"single_call_{selected_provider}",
+                    "runtime_sec": runtime_sec,
+                    "status": "failed",
+                    "provider": selected_provider,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+
+    total_runtime_sec = round(time.perf_counter() - started, 3)
+    report = _summarize_report(
+        started_at=started_at,
+        dataset_path=dataset_path,
+        mode=f"single_call_{selected_provider}",
+        total_runtime_sec=total_runtime_sec,
+        runs=runs,
+    )
+    report["provider"] = selected_provider
+    report["baseline_type"] = "single_call_llm"
+    return report
+
+
 async def run_duel_benchmark(
     orchestrator: RimOrchestrator,
     dataset_path: Path = DEFAULT_DATASET_PATH,
@@ -554,11 +812,24 @@ async def run_duel_benchmark(
     min_quality_delta: float = 0.0,
     max_runtime_delta_sec: float | None = None,
     min_shared_runs: int = 1,
+    baseline_provider: str = "proxy",
 ) -> dict[str, Any]:
-    baseline = run_single_pass_baseline(
-        dataset_path=dataset_path,
-        limit=limit,
-    )
+    parsed_baseline_provider = str(baseline_provider or "proxy").strip().lower()
+    if parsed_baseline_provider not in {"proxy", "claude", "codex"}:
+        raise ValueError("baseline_provider must be one of: proxy, claude, codex")
+    if parsed_baseline_provider in {"claude", "codex"}:
+        baseline = await run_single_call_llm_baseline(
+            dataset_path=dataset_path,
+            provider=parsed_baseline_provider,
+            mode=mode,
+            limit=limit,
+            router=getattr(orchestrator, "router", None),
+        )
+    else:
+        baseline = run_single_pass_baseline(
+            dataset_path=dataset_path,
+            limit=limit,
+        )
     target = await run_benchmark(
         orchestrator=orchestrator,
         dataset_path=dataset_path,
@@ -577,6 +848,7 @@ async def run_duel_benchmark(
         "target": target,
         "comparison": comparison,
         "gate": gate,
+        "baseline_provider": parsed_baseline_provider,
     }
 
 
@@ -1206,6 +1478,381 @@ def train_specialist_arbitration_policy(
             "average_failure_rate": round(avg_failure, 4),
             "average_disagreement_count": round(avg_disagreement, 4),
             "average_diversity_flagged_count": round(avg_diversity, 4),
+            "target_quality": target_quality,
+            "target_runtime_sec": target_runtime_sec,
+        },
+        "rationale": rationale,
+        "samples": samples[:20],
+    }
+
+
+def _arbitration_report_signals(report: dict[str, Any]) -> dict[str, float]:
+    runs = report.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    completed = [
+        item
+        for item in runs
+        if isinstance(item, dict) and str(item.get("status") or "").strip().lower() == "completed"
+    ]
+    if not completed:
+        return {
+            "completed_runs": 0.0,
+            "avg_disagreement_count": 0.0,
+            "avg_arbitration_resolved_count": 0.0,
+            "avg_devils_advocate_count": 0.0,
+            "avg_specialist_count": 0.0,
+        }
+
+    disagreement_total = 0.0
+    arbitration_resolved_total = 0.0
+    devils_advocate_total = 0.0
+    specialist_total = 0.0
+    for item in completed:
+        telemetry = item.get("telemetry")
+        if not isinstance(telemetry, dict):
+            continue
+        disagreement_total += _to_float(telemetry.get("disagreement_count"), 0.0)
+        arbitration_resolved_total += _to_float(
+            telemetry.get("arbitration_resolved_count"),
+            0.0,
+        )
+        devils_advocate_total += _to_float(telemetry.get("devils_advocate_count"), 0.0)
+        specialist_total += _to_float(telemetry.get("specialist_count"), 0.0)
+
+    count = float(len(completed))
+    return {
+        "completed_runs": count,
+        "avg_disagreement_count": round(disagreement_total / count, 4),
+        "avg_arbitration_resolved_count": round(arbitration_resolved_total / count, 4),
+        "avg_devils_advocate_count": round(devils_advocate_total / count, 4),
+        "avg_specialist_count": round(specialist_total / count, 4),
+    }
+
+
+def calibrate_arbitration_policy(
+    report: dict[str, Any],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    avg_quality = float(report.get("average_quality_score", 0.0))
+    avg_runtime = float(report.get("average_runtime_sec", 0.0))
+    dataset_size = max(1, int(report.get("dataset_size", 1)))
+    failures = int(report.get("failure_count", 0))
+    failure_rate = failures / float(dataset_size)
+    telemetry = _arbitration_report_signals(report)
+
+    quality_gap = float(target_quality) - avg_quality
+    quality_pressure = _clamp_float(quality_gap / max(float(target_quality), 0.05), -1.0, 1.0)
+    runtime_pressure = 0.0
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        runtime_pressure = (avg_runtime - float(target_runtime_sec)) / float(target_runtime_sec)
+
+    disagreement_pressure = _clamp_float(
+        float(telemetry["avg_disagreement_count"]) / 2.0,
+        0.0,
+        1.0,
+    )
+    resolved_ratio = float(telemetry["avg_arbitration_resolved_count"]) / max(
+        float(telemetry["avg_disagreement_count"]),
+        0.5,
+    )
+    resolution_pressure = _clamp_float(0.55 - resolved_ratio, -1.0, 1.0)
+    devils_pressure = _clamp_float(
+        float(telemetry["avg_devils_advocate_count"])
+        / max(float(telemetry["avg_arbitration_resolved_count"]), 1.0),
+        0.0,
+        1.0,
+    )
+    specialist_pressure = _clamp_float(
+        float(telemetry["avg_specialist_count"]) / 2.0,
+        0.0,
+        1.0,
+    )
+
+    arbitration_pressure = (
+        (0.65 * quality_pressure)
+        + (0.7 * disagreement_pressure)
+        + (0.45 * resolution_pressure)
+        + (0.25 * devils_pressure)
+        + (0.2 * specialist_pressure)
+        - (0.6 * max(runtime_pressure, 0.0))
+        - (0.45 * failure_rate)
+    )
+    arbitration_pressure = _clamp_float(arbitration_pressure, -1.0, 1.0)
+
+    base = {
+        "RIM_ENABLE_DISAGREEMENT_ARBITRATION": 1,
+        "RIM_ARBITRATION_MAX_JOBS": 2,
+        "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION": 1,
+        "RIM_DEVILS_ADVOCATE_ROUNDS": 1,
+        "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE": 0.72,
+    }
+
+    enable_arbitration = 1
+    if (
+        arbitration_pressure < -0.4
+        and max(runtime_pressure, 0.0) > 0.2
+        and disagreement_pressure < 0.2
+    ):
+        enable_arbitration = 0
+
+    max_jobs = _clamp_int(
+        int(
+            round(
+                base["RIM_ARBITRATION_MAX_JOBS"]
+                + (2.0 * max(arbitration_pressure, 0.0))
+                + (1.0 * disagreement_pressure)
+                - (1.0 * max(-arbitration_pressure, 0.0))
+            )
+        ),
+        0,
+        6,
+    )
+
+    enable_devils_advocate = 1
+    if enable_arbitration == 0:
+        enable_devils_advocate = 0
+    elif (
+        quality_pressure <= 0.0
+        and max(runtime_pressure, 0.0) > 0.25
+        and disagreement_pressure < 0.25
+    ):
+        enable_devils_advocate = 0
+
+    devils_rounds = _clamp_int(
+        int(
+            round(
+                base["RIM_DEVILS_ADVOCATE_ROUNDS"]
+                + (1.0 * max(arbitration_pressure, 0.0))
+                + (0.5 * devils_pressure)
+                - (1.0 * max(runtime_pressure, 0.0))
+            )
+        ),
+        0,
+        3,
+    )
+    devils_min_confidence = round(
+        _clamp_float(
+            base["RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE"]
+            - (0.1 * max(arbitration_pressure, 0.0))
+            + (0.08 * max(runtime_pressure, 0.0))
+            + (0.05 * max(-quality_pressure, 0.0)),
+            0.55,
+            0.95,
+        ),
+        3,
+    )
+
+    if enable_arbitration == 0:
+        max_jobs = 0
+        enable_devils_advocate = 0
+        devils_rounds = 0
+    if enable_devils_advocate == 0:
+        devils_rounds = 0
+
+    rationale: list[str] = []
+    if quality_pressure > 0.15:
+        rationale.append("Average quality is below target; disagreement arbitration is strengthened.")
+    elif quality_pressure < -0.15:
+        rationale.append("Average quality is above target; arbitration can be moderated.")
+    if disagreement_pressure > 0.3:
+        rationale.append("Disagreement pressure suggests keeping arbitration coverage broad.")
+    if resolution_pressure > 0.2:
+        rationale.append("Observed arbitration resolution appears low; policy expands arbitration capacity.")
+    if target_runtime_sec is not None and float(target_runtime_sec) > 0:
+        if avg_runtime > float(target_runtime_sec):
+            rationale.append("Average runtime exceeds target; arbitration depth is moderated.")
+        else:
+            rationale.append("Average runtime is within target runtime budget.")
+    if failure_rate > 0.2:
+        rationale.append("Failure rate is elevated; policy avoids aggressive arbitration expansion.")
+
+    recommended_env = {
+        "RIM_ENABLE_DISAGREEMENT_ARBITRATION": enable_arbitration,
+        "RIM_ARBITRATION_MAX_JOBS": max_jobs,
+        "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION": enable_devils_advocate,
+        "RIM_DEVILS_ADVOCATE_ROUNDS": devils_rounds,
+        "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE": devils_min_confidence,
+    }
+    return {
+        "inputs": {
+            "average_quality_score": avg_quality,
+            "average_runtime_sec": avg_runtime,
+            "failure_rate": round(failure_rate, 4),
+            "dataset_size": dataset_size,
+            "target_quality": float(target_quality),
+            "target_runtime_sec": target_runtime_sec,
+            "telemetry": telemetry,
+        },
+        "signals": {
+            "quality_pressure": round(quality_pressure, 4),
+            "runtime_pressure": round(runtime_pressure, 4),
+            "disagreement_pressure": round(disagreement_pressure, 4),
+            "resolution_pressure": round(resolution_pressure, 4),
+            "devils_pressure": round(devils_pressure, 4),
+            "specialist_pressure": round(specialist_pressure, 4),
+            "arbitration_pressure": round(arbitration_pressure, 4),
+        },
+        "base": base,
+        "recommended_env": recommended_env,
+        "rationale": rationale,
+    }
+
+
+def train_arbitration_policy(
+    reports: list[dict[str, Any]],
+    *,
+    target_quality: float = 0.65,
+    target_runtime_sec: float | None = None,
+) -> dict[str, Any]:
+    valid_reports: list[dict[str, Any]] = []
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        if int(report.get("dataset_size", 0)) <= 0:
+            continue
+        valid_reports.append(report)
+
+    if not valid_reports:
+        empty_policy = {
+            "RIM_ENABLE_DISAGREEMENT_ARBITRATION": 1,
+            "RIM_ARBITRATION_MAX_JOBS": 2,
+            "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION": 1,
+            "RIM_DEVILS_ADVOCATE_ROUNDS": 1,
+            "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE": 0.72,
+        }
+        return {
+            "report_count": 0,
+            "policy_env": empty_policy,
+            "rationale": ["No valid reports were available; returning default arbitration policy."],
+        }
+
+    weighted: dict[str, float] = {
+        "RIM_ENABLE_DISAGREEMENT_ARBITRATION": 0.0,
+        "RIM_ARBITRATION_MAX_JOBS": 0.0,
+        "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION": 0.0,
+        "RIM_DEVILS_ADVOCATE_ROUNDS": 0.0,
+        "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE": 0.0,
+    }
+    total_weight = 0.0
+    quality_sum = 0.0
+    runtime_sum = 0.0
+    failure_sum = 0.0
+    disagreement_sum = 0.0
+    resolved_sum = 0.0
+    devils_sum = 0.0
+    samples: list[dict[str, Any]] = []
+
+    for report in valid_reports:
+        calibration = calibrate_arbitration_policy(
+            report,
+            target_quality=target_quality,
+            target_runtime_sec=target_runtime_sec,
+        )
+        env = calibration["recommended_env"]
+        report_quality = float(report.get("average_quality_score", 0.0))
+        report_failure = (
+            float(report.get("failure_count", 0)) / max(1, int(report.get("dataset_size", 1)))
+        )
+        telemetry = calibration.get("inputs", {}).get("telemetry", {})
+        avg_disagreement = _to_float(
+            telemetry.get("avg_disagreement_count") if isinstance(telemetry, dict) else 0.0,
+            0.0,
+        )
+        avg_resolved = _to_float(
+            telemetry.get("avg_arbitration_resolved_count")
+            if isinstance(telemetry, dict)
+            else 0.0,
+            0.0,
+        )
+        avg_devils = _to_float(
+            telemetry.get("avg_devils_advocate_count")
+            if isinstance(telemetry, dict)
+            else 0.0,
+            0.0,
+        )
+        weight = max(0.1, report_quality + 0.15 - (0.25 * report_failure) + (0.05 * avg_disagreement))
+        total_weight += weight
+        quality_sum += report_quality
+        runtime_sum += float(report.get("average_runtime_sec", 0.0))
+        failure_sum += report_failure
+        disagreement_sum += avg_disagreement
+        resolved_sum += avg_resolved
+        devils_sum += avg_devils
+        for key in weighted:
+            weighted[key] += float(env[key]) * weight
+        samples.append(
+            {
+                "created_at": report.get("created_at"),
+                "mode": report.get("mode"),
+                "weight": round(weight, 4),
+                "recommended_env": env,
+            }
+        )
+
+    if total_weight <= 0:
+        total_weight = float(len(valid_reports))
+    enable_arbitration = 1 if (weighted["RIM_ENABLE_DISAGREEMENT_ARBITRATION"] / total_weight) >= 0.5 else 0
+    enable_devils = 1 if (weighted["RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION"] / total_weight) >= 0.5 else 0
+    max_jobs = _clamp_int(
+        int(round(weighted["RIM_ARBITRATION_MAX_JOBS"] / total_weight)),
+        0,
+        6,
+    )
+    devils_rounds = _clamp_int(
+        int(round(weighted["RIM_DEVILS_ADVOCATE_ROUNDS"] / total_weight)),
+        0,
+        3,
+    )
+    if enable_arbitration == 0:
+        max_jobs = 0
+        enable_devils = 0
+        devils_rounds = 0
+    if enable_devils == 0:
+        devils_rounds = 0
+    policy_env = {
+        "RIM_ENABLE_DISAGREEMENT_ARBITRATION": enable_arbitration,
+        "RIM_ARBITRATION_MAX_JOBS": max_jobs,
+        "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION": enable_devils,
+        "RIM_DEVILS_ADVOCATE_ROUNDS": devils_rounds,
+        "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE": round(
+            _clamp_float(weighted["RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE"] / total_weight, 0.55, 0.95),
+            3,
+        ),
+    }
+    avg_quality = quality_sum / len(valid_reports)
+    avg_runtime = runtime_sum / len(valid_reports)
+    avg_failure = failure_sum / len(valid_reports)
+    avg_disagreement = disagreement_sum / len(valid_reports)
+    avg_resolved = resolved_sum / len(valid_reports)
+    avg_devils = devils_sum / len(valid_reports)
+    rationale = [
+        "Policy aggregates arbitration-calibration recommendations using weighted averaging.",
+    ]
+    if avg_quality < target_quality:
+        rationale.append("Average quality is below target, so arbitration coverage remains active.")
+    else:
+        rationale.append("Average quality meets target, so arbitration policy remains balanced.")
+    if target_runtime_sec is not None and target_runtime_sec > 0 and avg_runtime > target_runtime_sec:
+        rationale.append("Average runtime exceeds target, so arbitration volume is moderated.")
+    if avg_failure > 0.2:
+        rationale.append("Failure rate is elevated; policy avoids aggressive arbitration expansion.")
+    if avg_disagreement > 0.5 or avg_resolved < 0.4:
+        rationale.append("Disagreement and low-resolution signals support stronger arbitration policy defaults.")
+
+    return {
+        "report_count": len(valid_reports),
+        "policy_env": policy_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": policy_env}),
+        "summary": {
+            "average_quality_score": round(avg_quality, 4),
+            "average_runtime_sec": round(avg_runtime, 4),
+            "average_failure_rate": round(avg_failure, 4),
+            "average_disagreement_count": round(avg_disagreement, 4),
+            "average_arbitration_resolved_count": round(avg_resolved, 4),
+            "average_devils_advocate_count": round(avg_devils, 4),
             "target_quality": target_quality,
             "target_runtime_sec": target_runtime_sec,
         },
@@ -2053,6 +2700,59 @@ def _blend_specialist_policy_env(
     }
 
 
+def _blend_arbitration_policy_env(
+    *,
+    prior_env: dict[str, Any] | None,
+    fresh_env: dict[str, Any],
+    learning_rate: float,
+) -> dict[str, Any]:
+    prior = prior_env or {}
+    alpha = _clamp_float(float(learning_rate), 0.0, 1.0)
+    enable_score = (1.0 - alpha) * _to_float(prior.get("RIM_ENABLE_DISAGREEMENT_ARBITRATION"), 1.0)
+    enable_score += alpha * _to_float(fresh_env.get("RIM_ENABLE_DISAGREEMENT_ARBITRATION"), 1.0)
+    max_jobs = (1.0 - alpha) * _to_float(prior.get("RIM_ARBITRATION_MAX_JOBS"), 2.0)
+    max_jobs += alpha * _to_float(fresh_env.get("RIM_ARBITRATION_MAX_JOBS"), 2.0)
+    devils_enable_score = (1.0 - alpha) * _to_float(
+        prior.get("RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION"),
+        1.0,
+    )
+    devils_enable_score += alpha * _to_float(
+        fresh_env.get("RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION"),
+        1.0,
+    )
+    devils_rounds = (1.0 - alpha) * _to_float(prior.get("RIM_DEVILS_ADVOCATE_ROUNDS"), 1.0)
+    devils_rounds += alpha * _to_float(fresh_env.get("RIM_DEVILS_ADVOCATE_ROUNDS"), 1.0)
+    devils_min_conf = (1.0 - alpha) * _to_float(
+        prior.get("RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE"),
+        0.72,
+    )
+    devils_min_conf += alpha * _to_float(
+        fresh_env.get("RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE"),
+        0.72,
+    )
+
+    enable_arbitration = 1 if enable_score >= 0.5 else 0
+    enable_devils = 1 if devils_enable_score >= 0.5 else 0
+    normalized_jobs = _clamp_int(int(round(max_jobs)), 0, 6)
+    normalized_rounds = _clamp_int(int(round(devils_rounds)), 0, 3)
+    if enable_arbitration == 0:
+        normalized_jobs = 0
+        enable_devils = 0
+        normalized_rounds = 0
+    if enable_devils == 0:
+        normalized_rounds = 0
+    return {
+        "RIM_ENABLE_DISAGREEMENT_ARBITRATION": enable_arbitration,
+        "RIM_ARBITRATION_MAX_JOBS": normalized_jobs,
+        "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION": enable_devils,
+        "RIM_DEVILS_ADVOCATE_ROUNDS": normalized_rounds,
+        "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE": round(
+            _clamp_float(devils_min_conf, 0.55, 0.95),
+            3,
+        ),
+    }
+
+
 def _blend_memory_policy_env(
     *,
     prior_env: dict[str, Any] | None,
@@ -2254,6 +2954,7 @@ def train_online_depth_and_arbitration_policies(
     learning_rate: float = 0.35,
     prior_depth_policy_env: dict[str, Any] | None = None,
     prior_specialist_policy_env: dict[str, Any] | None = None,
+    prior_arbitration_policy_env: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     valid_reports, report_ids = _valid_training_reports(reports)
     depth_candidate = train_depth_policy(
@@ -2262,6 +2963,11 @@ def train_online_depth_and_arbitration_policies(
         target_runtime_sec=target_runtime_sec,
     )
     specialist_candidate = train_specialist_arbitration_policy(
+        valid_reports,
+        target_quality=target_quality,
+        target_runtime_sec=target_runtime_sec,
+    )
+    arbitration_candidate = train_arbitration_policy(
         valid_reports,
         target_quality=target_quality,
         target_runtime_sec=target_runtime_sec,
@@ -2275,6 +2981,11 @@ def train_online_depth_and_arbitration_policies(
     specialist_env = _blend_specialist_policy_env(
         prior_env=prior_specialist_policy_env,
         fresh_env=dict(specialist_candidate.get("policy_env") or {}),
+        learning_rate=alpha,
+    )
+    arbitration_env = _blend_arbitration_policy_env(
+        prior_env=prior_arbitration_policy_env,
+        fresh_env=dict(arbitration_candidate.get("policy_env") or {}),
         learning_rate=alpha,
     )
     depth_payload = {
@@ -2297,10 +3008,21 @@ def train_online_depth_and_arbitration_policies(
             "candidate_policy_env": specialist_candidate.get("policy_env") or {},
         },
     }
+    arbitration_payload = {
+        **arbitration_candidate,
+        "policy_env": arbitration_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": arbitration_env}),
+        "blend": {
+            "learning_rate": alpha,
+            "prior_policy_env": prior_arbitration_policy_env or {},
+            "candidate_policy_env": arbitration_candidate.get("policy_env") or {},
+        },
+    }
     combined_exports = sorted(
         set(
             list(depth_payload["recommended_exports"])
             + list(specialist_payload["recommended_exports"])
+            + list(arbitration_payload["recommended_exports"])
         )
     )
     return {
@@ -2311,6 +3033,7 @@ def train_online_depth_and_arbitration_policies(
         "target_runtime_sec": target_runtime_sec,
         "depth_policy": depth_payload,
         "specialist_policy": specialist_payload,
+        "arbitration_policy": arbitration_payload,
         "recommended_exports": combined_exports,
     }
 
@@ -2448,6 +3171,26 @@ def _rl_experiences(
                 1.0 if telemetry_dict.get("specialist_loop_enabled_config") else 0.0,
                 0.0,
             )
+            arbitration_jobs = _to_float(
+                telemetry_dict.get("arbitration_max_jobs_config"),
+                _to_float(telemetry_dict.get("arbitration_jobs_requested_config"), 2.0),
+            )
+            devils_advocate_enabled = _to_float(
+                1.0 if telemetry_dict.get("devils_advocate_enabled_config") else 0.0,
+                0.0,
+            )
+            devils_advocate_rounds = _to_float(
+                telemetry_dict.get("devils_advocate_rounds_config"),
+                1.0,
+            )
+            devils_advocate_min_conf = _to_float(
+                telemetry_dict.get("devils_advocate_min_confidence_config"),
+                0.72,
+            )
+            disagreement_arbitration_enabled = _to_float(
+                1.0 if telemetry_dict.get("disagreement_arbitration_enabled_config") else 0.0,
+                0.0,
+            )
             if depth_cycles <= 0:
                 depth_cycles = 1.0
             if depth_min_conf <= 0:
@@ -2458,6 +3201,12 @@ def _rl_experiences(
                 specialist_jobs = 2.0
             if specialist_min_conf <= 0:
                 specialist_min_conf = 0.78
+            if arbitration_jobs < 0:
+                arbitration_jobs = 2.0
+            if devils_advocate_rounds < 0:
+                devils_advocate_rounds = 0.0
+            if devils_advocate_min_conf <= 0:
+                devils_advocate_min_conf = 0.72
 
             reward = quality_score - (runtime_weight_normalized * runtime_pressure)
             if status in {"failed", "canceled"}:
@@ -2483,6 +3232,11 @@ def _rl_experiences(
                         "specialist_jobs": specialist_jobs,
                         "specialist_min_conf": specialist_min_conf,
                         "specialist_enabled": specialist_enabled,
+                        "arbitration_jobs": arbitration_jobs,
+                        "disagreement_arbitration_enabled": disagreement_arbitration_enabled,
+                        "devils_advocate_enabled": devils_advocate_enabled,
+                        "devils_advocate_rounds": devils_advocate_rounds,
+                        "devils_advocate_min_conf": devils_advocate_min_conf,
                     },
                 }
             )
@@ -2500,6 +3254,7 @@ def train_rl_depth_and_arbitration_policies(
     reward_failure_penalty: float = 1.0,
     prior_depth_policy_env: dict[str, Any] | None = None,
     prior_specialist_policy_env: dict[str, Any] | None = None,
+    prior_arbitration_policy_env: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     valid_reports, report_ids = _valid_training_reports(reports)
     experiences = _rl_experiences(
@@ -2534,6 +3289,30 @@ def train_rl_depth_and_arbitration_policies(
             0.78,
         ),
     }
+    arbitration = {
+        "enabled_score": _to_float(
+            (prior_arbitration_policy_env or {}).get("RIM_ENABLE_DISAGREEMENT_ARBITRATION"),
+            1.0,
+        ),
+        "max_jobs": _to_float(
+            (prior_arbitration_policy_env or {}).get("RIM_ARBITRATION_MAX_JOBS"),
+            2.0,
+        ),
+        "devils_enabled_score": _to_float(
+            (prior_arbitration_policy_env or {}).get(
+                "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION"
+            ),
+            1.0,
+        ),
+        "devils_rounds": _to_float(
+            (prior_arbitration_policy_env or {}).get("RIM_DEVILS_ADVOCATE_ROUNDS"),
+            1.0,
+        ),
+        "devils_min_conf": _to_float(
+            (prior_arbitration_policy_env or {}).get("RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE"),
+            0.72,
+        ),
+    }
     if not experiences:
         depth_env = _blend_depth_policy_env(
             prior_env=prior_depth_policy_env,
@@ -2542,6 +3321,11 @@ def train_rl_depth_and_arbitration_policies(
         )
         specialist_env = _blend_specialist_policy_env(
             prior_env=prior_specialist_policy_env,
+            fresh_env={},
+            learning_rate=0.0,
+        )
+        arbitration_env = _blend_arbitration_policy_env(
+            prior_env=prior_arbitration_policy_env,
             fresh_env={},
             learning_rate=0.0,
         )
@@ -2564,14 +3348,21 @@ def train_rl_depth_and_arbitration_policies(
                 "recommended_exports": calibration_env_exports({"recommended_env": specialist_env}),
                 "rationale": ["No eligible run experiences; returning prior/default specialist policy."],
             },
+            "arbitration_policy": {
+                "policy_env": arbitration_env,
+                "recommended_exports": calibration_env_exports({"recommended_env": arbitration_env}),
+                "rationale": ["No eligible run experiences; returning prior/default arbitration policy."],
+            },
             "credit_assignment": {
                 "depth": {"positive": 0.0, "negative": 0.0, "top_runs": []},
                 "specialist": {"positive": 0.0, "negative": 0.0, "top_runs": []},
+                "arbitration": {"positive": 0.0, "negative": 0.0, "top_runs": []},
             },
             "recommended_exports": sorted(
                 set(
                     calibration_env_exports({"recommended_env": depth_env})
                     + calibration_env_exports({"recommended_env": specialist_env})
+                    + calibration_env_exports({"recommended_env": arbitration_env})
                 )
             ),
         }
@@ -2580,6 +3371,7 @@ def train_rl_depth_and_arbitration_policies(
     reward_baseline = sum(rewards) / len(rewards)
     depth_credits: list[dict[str, Any]] = []
     specialist_credits: list[dict[str, Any]] = []
+    arbitration_credits: list[dict[str, Any]] = []
 
     for _epoch in range(epoch_count):
         for exp in experiences:
@@ -2595,9 +3387,29 @@ def train_rl_depth_and_arbitration_policies(
             depth_min_conf_action = _to_float(action_payload.get("depth_min_conf"), 0.78)
             specialist_jobs_action = _to_float(action_payload.get("specialist_jobs"), 2.0)
             specialist_enabled_action = _to_float(action_payload.get("specialist_enabled"), 1.0)
+            arbitration_jobs_action = _to_float(action_payload.get("arbitration_jobs"), 2.0)
+            disagreement_arbitration_enabled_action = _to_float(
+                action_payload.get("disagreement_arbitration_enabled"),
+                1.0,
+            )
+            devils_advocate_enabled_action = _to_float(
+                action_payload.get("devils_advocate_enabled"),
+                1.0,
+            )
+            devils_advocate_rounds_action = _to_float(
+                action_payload.get("devils_advocate_rounds"),
+                1.0,
+            )
+            devils_advocate_min_conf_action = _to_float(
+                action_payload.get("devils_advocate_min_conf"),
+                0.72,
+            )
 
             depth_signal = quality_gap + (0.25 * disagreement) - (0.70 * runtime_pressure)
             specialist_signal = (0.9 * disagreement) + (0.5 * diversity) - (0.6 * runtime_pressure)
+            arbitration_signal = (1.0 * disagreement) + (0.35 * diversity) + (0.4 * quality_gap) - (
+                0.75 * runtime_pressure
+            )
             depth_action_intensity = max(
                 0.0,
                 (0.35 * max(depth_cycles_action - 1.0, 0.0))
@@ -2608,11 +3420,24 @@ def train_rl_depth_and_arbitration_policies(
                 (0.45 * specialist_enabled_action)
                 + (0.2 * max(specialist_jobs_action - 1.0, 0.0)),
             )
+            arbitration_action_intensity = max(
+                0.0,
+                (0.4 * disagreement_arbitration_enabled_action)
+                + (0.2 * max(arbitration_jobs_action - 1.0, 0.0))
+                + (0.2 * devils_advocate_enabled_action)
+                + (0.16 * max(devils_advocate_rounds_action, 0.0))
+                + (0.1 * max(0.75 - devils_advocate_min_conf_action, 0.0)),
+            )
             depth_credit = advantage * depth_signal * (1.0 + (0.2 * depth_action_intensity))
             specialist_credit = (
                 advantage
                 * specialist_signal
                 * (1.0 + (0.2 * specialist_action_intensity))
+            )
+            arbitration_credit = (
+                advantage
+                * arbitration_signal
+                * (1.0 + (0.2 * arbitration_action_intensity))
             )
 
             depth["max_cycles"] += alpha * depth_credit
@@ -2624,6 +3449,12 @@ def train_rl_depth_and_arbitration_policies(
             specialist["min_conf"] += alpha * (0.08 * specialist_credit)
             specialist["enabled_score"] += alpha * (0.35 * specialist_credit)
 
+            arbitration["max_jobs"] += alpha * (0.52 * arbitration_credit)
+            arbitration["enabled_score"] += alpha * (0.34 * arbitration_credit)
+            arbitration["devils_enabled_score"] += alpha * (0.36 * arbitration_credit)
+            arbitration["devils_rounds"] += alpha * (0.35 * arbitration_credit)
+            arbitration["devils_min_conf"] += alpha * (-0.08 * arbitration_credit)
+
             depth["max_cycles"] = _clamp_float(depth["max_cycles"], 1.0, 4.0)
             depth["min_conf"] = _clamp_float(depth["min_conf"], 0.65, 0.93)
             depth["max_risks"] = _clamp_float(depth["max_risks"], 0.0, 4.0)
@@ -2632,6 +3463,15 @@ def train_rl_depth_and_arbitration_policies(
             specialist["jobs"] = _clamp_float(specialist["jobs"], 0.0, 6.0)
             specialist["min_conf"] = _clamp_float(specialist["min_conf"], 0.6, 0.95)
             specialist["enabled_score"] = _clamp_float(specialist["enabled_score"], 0.0, 1.0)
+            arbitration["max_jobs"] = _clamp_float(arbitration["max_jobs"], 0.0, 6.0)
+            arbitration["enabled_score"] = _clamp_float(arbitration["enabled_score"], 0.0, 1.0)
+            arbitration["devils_enabled_score"] = _clamp_float(
+                arbitration["devils_enabled_score"],
+                0.0,
+                1.0,
+            )
+            arbitration["devils_rounds"] = _clamp_float(arbitration["devils_rounds"], 0.0, 3.0)
+            arbitration["devils_min_conf"] = _clamp_float(arbitration["devils_min_conf"], 0.55, 0.95)
 
             depth_credits.append(
                 {
@@ -2651,6 +3491,15 @@ def train_rl_depth_and_arbitration_policies(
                     "action_intensity": round(specialist_action_intensity, 6),
                 }
             )
+            arbitration_credits.append(
+                {
+                    "run_id": exp["run_id"],
+                    "credit": round(arbitration_credit, 6),
+                    "advantage": round(advantage, 6),
+                    "signal": round(arbitration_signal, 6),
+                    "action_intensity": round(arbitration_action_intensity, 6),
+                }
+            )
 
     depth_env = {
         "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE": round(depth["min_conf"], 3),
@@ -2666,6 +3515,23 @@ def train_rl_depth_and_arbitration_policies(
         "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": specialist_enable,
         "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": specialist_jobs,
         "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": round(specialist["min_conf"], 3),
+    }
+    arbitration_enable = 1 if arbitration["enabled_score"] >= 0.5 else 0
+    devils_enable = 1 if arbitration["devils_enabled_score"] >= 0.5 else 0
+    arbitration_jobs = _clamp_int(int(round(arbitration["max_jobs"])), 0, 6)
+    devils_rounds = _clamp_int(int(round(arbitration["devils_rounds"])), 0, 3)
+    if arbitration_enable == 0:
+        arbitration_jobs = 0
+        devils_enable = 0
+        devils_rounds = 0
+    if devils_enable == 0:
+        devils_rounds = 0
+    arbitration_env = {
+        "RIM_ENABLE_DISAGREEMENT_ARBITRATION": arbitration_enable,
+        "RIM_ARBITRATION_MAX_JOBS": arbitration_jobs,
+        "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION": devils_enable,
+        "RIM_DEVILS_ADVOCATE_ROUNDS": devils_rounds,
+        "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE": round(arbitration["devils_min_conf"], 3),
     }
 
     def _credit_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2696,6 +3562,15 @@ def train_rl_depth_and_arbitration_policies(
         "optimizer": "rl_credit_assignment_v1",
         "epochs": epoch_count,
     }
+    arbitration_payload = {
+        "policy_env": arbitration_env,
+        "recommended_exports": calibration_env_exports({"recommended_env": arbitration_env}),
+        "rationale": [
+            "Arbitration policy updated with disagreement/runtime reward credits.",
+        ],
+        "optimizer": "rl_credit_assignment_v1",
+        "epochs": epoch_count,
+    }
     return {
         "optimizer": "rl_credit_assignment_v1",
         "report_count": len(valid_reports),
@@ -2714,14 +3589,17 @@ def train_rl_depth_and_arbitration_policies(
         },
         "depth_policy": depth_payload,
         "specialist_policy": specialist_payload,
+        "arbitration_policy": arbitration_payload,
         "credit_assignment": {
             "depth": _credit_summary(depth_credits),
             "specialist": _credit_summary(specialist_credits),
+            "arbitration": _credit_summary(arbitration_credits),
         },
         "recommended_exports": sorted(
             set(
                 depth_payload["recommended_exports"]
                 + specialist_payload["recommended_exports"]
+                + arbitration_payload["recommended_exports"]
             )
         ),
     }
@@ -3197,6 +4075,7 @@ async def run_online_depth_arbitration_learning_loop(
     reports_dir: Path = DEFAULT_REPORTS_DIR,
     depth_policy_path: Path = DEFAULT_POLICIES_DIR / "depth_policy.json",
     specialist_policy_path: Path = DEFAULT_POLICIES_DIR / "specialist_policy.json",
+    arbitration_policy_path: Path = DEFAULT_POLICIES_DIR / "arbitration_policy.json",
     spawn_policy_path: Path = DEFAULT_POLICIES_DIR / "spawn_policy.json",
     memory_policy_path: Path = DEFAULT_POLICIES_DIR / "memory_policy.json",
 ) -> dict[str, Any]:
@@ -3212,15 +4091,18 @@ async def run_online_depth_arbitration_learning_loop(
     reports_dir.mkdir(parents=True, exist_ok=True)
     depth_policy_path.parent.mkdir(parents=True, exist_ok=True)
     specialist_policy_path.parent.mkdir(parents=True, exist_ok=True)
+    arbitration_policy_path.parent.mkdir(parents=True, exist_ok=True)
     spawn_policy_path.parent.mkdir(parents=True, exist_ok=True)
     memory_policy_path.parent.mkdir(parents=True, exist_ok=True)
 
     previous_depth_path = os.getenv("RIM_DEPTH_POLICY_PATH")
     previous_specialist_path = os.getenv("RIM_SPECIALIST_POLICY_PATH")
+    previous_arbitration_path = os.getenv("RIM_ARBITRATION_POLICY_PATH")
     previous_spawn_path = os.getenv("RIM_SPAWN_POLICY_PATH")
     previous_memory_path = os.getenv("RIM_MEMORY_POLICY_PATH")
     os.environ["RIM_DEPTH_POLICY_PATH"] = str(depth_policy_path)
     os.environ["RIM_SPECIALIST_POLICY_PATH"] = str(specialist_policy_path)
+    os.environ["RIM_ARBITRATION_POLICY_PATH"] = str(arbitration_policy_path)
     os.environ["RIM_SPAWN_POLICY_PATH"] = str(spawn_policy_path)
     os.environ["RIM_MEMORY_POLICY_PATH"] = str(memory_policy_path)
     cycle_outputs: list[dict[str, Any]] = []
@@ -3242,6 +4124,7 @@ async def run_online_depth_arbitration_learning_loop(
             )
             prior_depth_env = load_policy_env(depth_policy_path)
             prior_specialist_env = load_policy_env(specialist_policy_path)
+            prior_arbitration_env = load_policy_env(arbitration_policy_path)
             if optimizer_name == "rl":
                 learning = train_rl_depth_and_arbitration_policies(
                     training_reports,
@@ -3253,6 +4136,7 @@ async def run_online_depth_arbitration_learning_loop(
                     reward_failure_penalty=normalized_rl_failure_penalty,
                     prior_depth_policy_env=prior_depth_env,
                     prior_specialist_policy_env=prior_specialist_env,
+                    prior_arbitration_policy_env=prior_arbitration_env,
                 )
             else:
                 learning = train_online_depth_and_arbitration_policies(
@@ -3262,6 +4146,7 @@ async def run_online_depth_arbitration_learning_loop(
                     learning_rate=alpha,
                     prior_depth_policy_env=prior_depth_env,
                     prior_specialist_policy_env=prior_specialist_env,
+                    prior_arbitration_policy_env=prior_arbitration_env,
                 )
             prior_spawn_env = load_policy_env(spawn_policy_path)
             if optimizer_name == "rl":
@@ -3315,6 +4200,18 @@ async def run_online_depth_arbitration_learning_loop(
                     "report_path": str(report_path),
                 },
             )
+            arbitration_save_path = save_policy_artifact(
+                learning["arbitration_policy"],
+                policy_kind="arbitration",
+                source_reports=training_paths,
+                output_path=arbitration_policy_path,
+                learning_meta={
+                    "cycle": cycle,
+                    "iterations": cycles,
+                    "learning_rate": alpha,
+                    "report_path": str(report_path),
+                },
+            )
             spawn_save_path = save_policy_artifact(
                 spawn_learning["spawn_policy"],
                 policy_kind="spawn",
@@ -3353,10 +4250,12 @@ async def run_online_depth_arbitration_learning_loop(
                     "optimizer": learning.get("optimizer", optimizer_name),
                     "depth_policy_path": str(depth_save_path),
                     "specialist_policy_path": str(specialist_save_path),
+                    "arbitration_policy_path": str(arbitration_save_path),
                     "spawn_policy_path": str(spawn_save_path),
                     "memory_policy_path": str(memory_save_path),
                     "depth_policy_env": learning["depth_policy"]["policy_env"],
                     "specialist_policy_env": learning["specialist_policy"]["policy_env"],
+                    "arbitration_policy_env": learning["arbitration_policy"]["policy_env"],
                     "spawn_policy_env": spawn_learning["spawn_policy"]["policy_env"],
                     "memory_policy_env": memory_learning["memory_policy"]["policy_env"],
                 }
@@ -3370,6 +4269,10 @@ async def run_online_depth_arbitration_learning_loop(
             os.environ.pop("RIM_SPECIALIST_POLICY_PATH", None)
         else:
             os.environ["RIM_SPECIALIST_POLICY_PATH"] = previous_specialist_path
+        if previous_arbitration_path is None:
+            os.environ.pop("RIM_ARBITRATION_POLICY_PATH", None)
+        else:
+            os.environ["RIM_ARBITRATION_POLICY_PATH"] = previous_arbitration_path
         if previous_spawn_path is None:
             os.environ.pop("RIM_SPAWN_POLICY_PATH", None)
         else:
@@ -3393,11 +4296,13 @@ async def run_online_depth_arbitration_learning_loop(
         "target_runtime_sec": target_runtime_sec,
         "depth_policy_path": str(depth_policy_path),
         "specialist_policy_path": str(specialist_policy_path),
+        "arbitration_policy_path": str(arbitration_policy_path),
         "spawn_policy_path": str(spawn_policy_path),
         "memory_policy_path": str(memory_policy_path),
         "recommended_exports": [
             f"export RIM_DEPTH_POLICY_PATH={depth_policy_path}",
             f"export RIM_SPECIALIST_POLICY_PATH={specialist_policy_path}",
+            f"export RIM_ARBITRATION_POLICY_PATH={arbitration_policy_path}",
             f"export RIM_SPAWN_POLICY_PATH={spawn_policy_path}",
             f"export RIM_MEMORY_POLICY_PATH={memory_policy_path}",
         ],

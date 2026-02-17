@@ -6,6 +6,7 @@ from rim.core.schemas import AnalyzeResult, DecompositionNode
 from rim.eval import runner
 from rim.eval.runner import (
     build_blind_review_packet,
+    calibrate_arbitration_policy,
     calibrate_depth_allocator,
     calibrate_specialist_arbitration_policy,
     calibration_env_exports,
@@ -14,10 +15,12 @@ from rim.eval.runner import (
     run_online_depth_arbitration_learning_loop,
     run_benchmark,
     run_duel_benchmark,
+    run_single_call_llm_baseline,
     run_single_pass_baseline,
     save_blind_review_packet,
     save_policy_artifact,
     save_report,
+    train_arbitration_policy,
     train_online_depth_and_arbitration_policies,
     train_depth_policy,
     train_memory_policy,
@@ -138,6 +141,42 @@ class MixedOutcomeOrchestrator:
         )
 
 
+class FakeSingleCallSession:
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+        self.stage_policy: dict[str, list[str]] = {}
+
+    async def invoke_json(self, stage, prompt, json_schema=None):  # noqa: ANN001, ANN201
+        assert stage.startswith("baseline_llm_")
+        assert "STRICT JSON only" in prompt
+        return (
+            {
+                "synthesized_idea": "LLM baseline output",
+                "changes_summary": ["change 1"],
+                "residual_risks": ["risk 1"],
+                "next_experiments": ["experiment 1"],
+                "confidence_score": 0.61,
+            },
+            self.provider,
+        )
+
+
+class FakeSingleCallRouter:
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+        self.created_sessions = 0
+
+    def create_session(self, run_id):  # noqa: ANN001, ANN201
+        self.created_sessions += 1
+        return FakeSingleCallSession(provider=self.provider)
+
+
+class MixedOutcomeOrchestratorWithRouter(MixedOutcomeOrchestrator):
+    def __init__(self, provider: str) -> None:
+        super().__init__()
+        self.router = FakeSingleCallRouter(provider=provider)
+
+
 def test_run_benchmark_continues_on_item_failure(tmp_path) -> None:  # noqa: ANN001
     dataset = tmp_path / "dataset.jsonl"
     dataset.write_text(
@@ -165,6 +204,45 @@ def test_run_benchmark_continues_on_item_failure(tmp_path) -> None:  # noqa: ANN
     failed = next(item for item in report["runs"] if item["status"] == "failed")
     assert failed["id"] == "bad-1"
     assert failed["error_type"] == "RuntimeError"
+
+
+def test_run_single_call_llm_baseline_returns_scored_report(tmp_path) -> None:  # noqa: ANN001
+    dataset = tmp_path / "dataset_single_call.jsonl"
+    dataset.write_text('{"id":"x1","idea":"Idea A","domain":"finance"}\n', encoding="utf-8")
+    router = FakeSingleCallRouter(provider="claude")
+    report = asyncio.run(
+        run_single_call_llm_baseline(
+            dataset_path=dataset,
+            provider="claude",
+            mode="deep",
+            limit=1,
+            router=router,
+        )
+    )
+    assert report["mode"] == "single_call_claude"
+    assert report["provider"] == "claude"
+    assert report["dataset_size"] == 1
+    assert report["success_count"] == 1
+    assert report["runs"][0]["run_id"] == "baseline-llm-claude-x1"
+    assert report["runs"][0]["provider"] == "claude"
+    assert router.created_sessions == 1
+
+
+def test_run_single_call_llm_baseline_rejects_invalid_provider(tmp_path) -> None:  # noqa: ANN001
+    dataset = tmp_path / "dataset_invalid_provider.jsonl"
+    dataset.write_text('{"id":"x1","idea":"Idea A"}\n', encoding="utf-8")
+    try:
+        asyncio.run(
+            run_single_call_llm_baseline(
+                dataset_path=dataset,
+                provider="openai",
+                limit=1,
+                router=FakeSingleCallRouter(provider="claude"),
+            )
+        )
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "provider must be one of" in str(exc)
 
 
 def test_run_benchmark_includes_domain_metrics_and_rubric_domain(tmp_path) -> None:  # noqa: ANN001
@@ -264,6 +342,25 @@ def test_run_duel_benchmark_outputs_comparison_and_gate(tmp_path) -> None:  # no
     assert payload["target"]["mode"] == "deep"
     assert payload["comparison"]["shared_run_count"] == 1
     assert payload["gate"]["passed"] is True
+
+
+def test_run_duel_benchmark_supports_single_call_llm_baseline(tmp_path) -> None:  # noqa: ANN001
+    dataset = tmp_path / "dataset_duel_single_call.jsonl"
+    dataset.write_text('{"id":"ok-1","idea":"first idea"}\n', encoding="utf-8")
+    orchestrator = MixedOutcomeOrchestratorWithRouter(provider="claude")
+    payload = asyncio.run(
+        run_duel_benchmark(
+            orchestrator=orchestrator,  # type: ignore[arg-type]
+            dataset_path=dataset,
+            mode="deep",
+            baseline_provider="claude",
+            min_quality_delta=0.0,
+            min_shared_runs=1,
+        )
+    )
+    assert payload["baseline"]["mode"] == "single_call_claude"
+    assert payload["baseline_provider"] == "claude"
+    assert payload["comparison"]["shared_run_count"] == 1
 
 
 def test_save_report_auto_paths_are_unique(tmp_path) -> None:  # noqa: ANN001
@@ -497,6 +594,96 @@ def test_train_specialist_arbitration_policy_aggregates_reports() -> None:
     assert payload["recommended_exports"]
 
 
+def test_calibrate_arbitration_policy_recommends_capacity() -> None:
+    report = {
+        "dataset_size": 10,
+        "average_quality_score": 0.5,
+        "average_runtime_sec": 56.0,
+        "failure_count": 1,
+        "runs": [
+            {
+                "status": "completed",
+                "telemetry": {
+                    "disagreement_count": 3,
+                    "arbitration_resolved_count": 1,
+                    "devils_advocate_count": 1,
+                    "specialist_count": 1,
+                },
+            },
+            {
+                "status": "completed",
+                "telemetry": {
+                    "disagreement_count": 2,
+                    "arbitration_resolved_count": 1,
+                    "devils_advocate_count": 1,
+                    "specialist_count": 1,
+                },
+            },
+        ],
+    }
+    calibration = calibrate_arbitration_policy(
+        report,
+        target_quality=0.7,
+        target_runtime_sec=60.0,
+    )
+    env = calibration["recommended_env"]
+    assert env["RIM_ENABLE_DISAGREEMENT_ARBITRATION"] == 1
+    assert env["RIM_ARBITRATION_MAX_JOBS"] >= 2
+    assert env["RIM_DEVILS_ADVOCATE_ROUNDS"] >= 1
+
+
+def test_train_arbitration_policy_aggregates_reports() -> None:
+    reports = [
+        {
+            "created_at": "2026-02-14T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.55,
+            "average_runtime_sec": 62.0,
+            "failure_count": 1,
+            "runs": [
+                {
+                    "status": "completed",
+                    "telemetry": {
+                        "disagreement_count": 3,
+                        "arbitration_resolved_count": 1,
+                        "devils_advocate_count": 1,
+                    },
+                }
+            ],
+        },
+        {
+            "created_at": "2026-02-15T00:00:00Z",
+            "dataset_size": 8,
+            "average_quality_score": 0.72,
+            "average_runtime_sec": 49.0,
+            "failure_count": 0,
+            "runs": [
+                {
+                    "status": "completed",
+                    "telemetry": {
+                        "disagreement_count": 1,
+                        "arbitration_resolved_count": 1,
+                        "devils_advocate_count": 0,
+                    },
+                }
+            ],
+        },
+    ]
+    payload = train_arbitration_policy(
+        reports,
+        target_quality=0.7,
+        target_runtime_sec=60.0,
+    )
+    assert payload["report_count"] == 2
+    env = payload["policy_env"]
+    assert "RIM_ENABLE_DISAGREEMENT_ARBITRATION" in env
+    assert "RIM_ARBITRATION_MAX_JOBS" in env
+    assert "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION" in env
+    assert "RIM_DEVILS_ADVOCATE_ROUNDS" in env
+    assert "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE" in env
+    assert payload["recommended_exports"]
+
+
 def test_train_spawn_policy_aggregates_reports() -> None:
     reports = [
         {
@@ -636,12 +823,21 @@ def test_train_online_depth_and_arbitration_policies_blends_prior() -> None:
             "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": 1,
             "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": 0.7,
         },
+        prior_arbitration_policy_env={
+            "RIM_ENABLE_DISAGREEMENT_ARBITRATION": 1,
+            "RIM_ARBITRATION_MAX_JOBS": 1,
+            "RIM_ENABLE_DEVILS_ADVOCATE_ARBITRATION": 1,
+            "RIM_DEVILS_ADVOCATE_ROUNDS": 1,
+            "RIM_DEVILS_ADVOCATE_MIN_CONFIDENCE": 0.8,
+        },
     )
     assert payload["report_count"] == 1
     depth_env = payload["depth_policy"]["policy_env"]
     specialist_env = payload["specialist_policy"]["policy_env"]
+    arbitration_env = payload["arbitration_policy"]["policy_env"]
     assert "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE" in depth_env
     assert "RIM_SPECIALIST_ARBITRATION_MAX_JOBS" in specialist_env
+    assert "RIM_ARBITRATION_MAX_JOBS" in arbitration_env
     assert payload["recommended_exports"]
 
 
@@ -704,9 +900,11 @@ def test_train_rl_depth_and_arbitration_policies_outputs_credit_assignment() -> 
     assert payload["experience_count"] == 2
     assert "depth_policy" in payload
     assert "specialist_policy" in payload
+    assert "arbitration_policy" in payload
     assert "credit_assignment" in payload
     assert payload["credit_assignment"]["depth"]["top_runs"]
     assert payload["credit_assignment"]["specialist"]["top_runs"]
+    assert payload["credit_assignment"]["arbitration"]["top_runs"]
 
 
 def test_train_rl_spawn_policy_outputs_credit_assignment() -> None:
@@ -825,6 +1023,7 @@ def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path
     reports_dir = tmp_path / "reports"
     depth_policy_path = tmp_path / "policies" / "depth_policy.json"
     specialist_policy_path = tmp_path / "policies" / "specialist_policy.json"
+    arbitration_policy_path = tmp_path / "policies" / "arbitration_policy.json"
     spawn_policy_path = tmp_path / "policies" / "spawn_policy.json"
     memory_policy_path = tmp_path / "policies" / "memory_policy.json"
 
@@ -844,6 +1043,7 @@ def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path
             reports_dir=reports_dir,
             depth_policy_path=depth_policy_path,
             specialist_policy_path=specialist_policy_path,
+            arbitration_policy_path=arbitration_policy_path,
             spawn_policy_path=spawn_policy_path,
             memory_policy_path=memory_policy_path,
         )
@@ -852,8 +1052,10 @@ def test_run_online_depth_arbitration_learning_loop_writes_policy_files(tmp_path
     assert payload["optimizer"] == "rl"
     assert depth_policy_path.exists() is True
     assert specialist_policy_path.exists() is True
+    assert arbitration_policy_path.exists() is True
     assert spawn_policy_path.exists() is True
     assert memory_policy_path.exists() is True
+    assert payload["arbitration_policy_path"] == str(arbitration_policy_path)
     assert payload["spawn_policy_path"] == str(spawn_policy_path)
     assert payload["memory_policy_path"] == str(memory_policy_path)
     assert payload["final"]["memory_policy_path"] == str(memory_policy_path)

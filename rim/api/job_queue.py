@@ -45,7 +45,7 @@ class RunJobQueue:
         return True
 
     async def _enqueue_pending_runs(self) -> None:
-        for run_id in self.repository.get_pending_runs():
+        for run_id in self.repository.get_pending_runs(include_running=False):
             await self._enqueue_run(run_id)
 
     async def start(self) -> None:
@@ -167,6 +167,8 @@ class RunJobQueue:
             return None
         if run.status not in RETRYABLE_RUN_STATUSES:
             raise ValueError("Run is not retryable unless status is failed, partial, or canceled.")
+        if self.repository.get_run_request(run_id) is None:
+            raise ValueError("Run cannot be retried because request payload is missing or invalid.")
         if not self.repository.reset_run_for_retry(run_id):
             return None
         await self._enqueue_run(run_id)

@@ -21,9 +21,11 @@ from rim.eval.runner import (
     run_online_depth_arbitration_learning_loop,
     run_benchmark,
     run_duel_benchmark,
+    run_single_call_llm_baseline,
     run_single_pass_baseline,
     save_blind_review_packet,
     save_report,
+    train_arbitration_policy,
     train_depth_policy,
     train_memory_policy,
     train_rl_depth_and_arbitration_policies,
@@ -223,6 +225,7 @@ async def _cmd_eval_duel(args: argparse.Namespace) -> int:
         min_quality_delta=args.min_quality_delta,
         max_runtime_delta_sec=args.max_runtime_delta_sec,
         min_shared_runs=args.min_shared_runs,
+        baseline_provider=args.baseline_provider,
     )
     baseline_path = save_report(
         result["baseline"],
@@ -235,6 +238,7 @@ async def _cmd_eval_duel(args: argparse.Namespace) -> int:
     payload = {
         "baseline_report": str(baseline_path),
         "target_report": str(target_path),
+        "baseline_provider": args.baseline_provider,
         "comparison": result["comparison"],
         "gate": result["gate"],
     }
@@ -254,6 +258,20 @@ def _cmd_eval_baseline(args: argparse.Namespace) -> int:
     dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
     report = run_single_pass_baseline(
         dataset_path=dataset,
+        limit=args.limit,
+    )
+    save_path = save_report(report, Path(args.save) if args.save else None)
+    report["report_path"] = str(save_path)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+async def _cmd_eval_baseline_llm(args: argparse.Namespace) -> int:
+    dataset = Path(args.dataset) if args.dataset else DEFAULT_DATASET_PATH
+    report = await run_single_call_llm_baseline(
+        dataset_path=dataset,
+        provider=args.provider,
+        mode=args.mode,
         limit=args.limit,
     )
     save_path = save_report(report, Path(args.save) if args.save else None)
@@ -409,6 +427,25 @@ def _cmd_eval_train_specialist_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_eval_train_arbitration_policy(args: argparse.Namespace) -> int:
+    report_paths = _resolve_train_policy_reports(args)
+    reports = [load_report(path) for path in report_paths]
+    policy = train_arbitration_policy(
+        reports,
+        target_quality=args.target_quality,
+        target_runtime_sec=args.target_runtime_sec,
+    )
+    payload = {
+        "report_count": len(report_paths),
+        "report_paths": [str(path) for path in report_paths],
+        "policy": policy,
+    }
+    if args.save:
+        Path(args.save).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def _cmd_eval_train_spawn_policy(args: argparse.Namespace) -> int:
     report_paths = _resolve_train_policy_reports(args)
     reports = [load_report(path) for path in report_paths]
@@ -540,6 +577,7 @@ async def _cmd_eval_autolearn(args: argparse.Namespace) -> int:
         reports_dir=reports_dir,
         depth_policy_path=Path(args.depth_policy_path),
         specialist_policy_path=Path(args.specialist_policy_path),
+        arbitration_policy_path=Path(args.arbitration_policy_path),
         spawn_policy_path=Path(args.spawn_policy_path),
         memory_policy_path=Path(args.memory_policy_path),
     )
@@ -603,6 +641,12 @@ def build_parser() -> argparse.ArgumentParser:
     eval_duel.add_argument("--save")
     eval_duel.add_argument("--save-baseline")
     eval_duel.add_argument("--save-target")
+    eval_duel.add_argument(
+        "--baseline-provider",
+        choices=["proxy", "claude", "codex"],
+        default="proxy",
+        help="baseline type: proxy=deterministic placeholder, claude/codex=single-call LLM baseline",
+    )
     eval_duel.add_argument("--min-quality-delta", type=float, default=0.0)
     eval_duel.add_argument("--max-runtime-delta-sec", type=float)
     eval_duel.add_argument("--min-shared-runs", type=int, default=1)
@@ -614,6 +658,15 @@ def build_parser() -> argparse.ArgumentParser:
     eval_baseline.add_argument("--dataset")
     eval_baseline.add_argument("--limit", type=int)
     eval_baseline.add_argument("--save")
+    eval_baseline_llm = eval_sub.add_parser(
+        "baseline-llm",
+        help="Run single-call Claude/Codex baseline benchmark",
+    )
+    eval_baseline_llm.add_argument("--provider", choices=["claude", "codex"], required=True)
+    eval_baseline_llm.add_argument("--dataset")
+    eval_baseline_llm.add_argument("--mode", choices=["deep", "fast"], default="deep")
+    eval_baseline_llm.add_argument("--limit", type=int)
+    eval_baseline_llm.add_argument("--save")
     eval_compare = eval_sub.add_parser(
         "compare",
         help="Compare two benchmark reports (defaults to latest two)",
@@ -673,6 +726,15 @@ def build_parser() -> argparse.ArgumentParser:
     eval_train_specialist_policy.add_argument("--target-quality", type=float, default=0.65)
     eval_train_specialist_policy.add_argument("--target-runtime-sec", type=float)
     eval_train_specialist_policy.add_argument("--save")
+    eval_train_arbitration_policy = eval_sub.add_parser(
+        "train-arbitration-policy",
+        help="Train an aggregated arbitration policy from benchmark reports",
+    )
+    eval_train_arbitration_policy.add_argument("--reports", help="comma-separated report paths")
+    eval_train_arbitration_policy.add_argument("--reports-dir")
+    eval_train_arbitration_policy.add_argument("--target-quality", type=float, default=0.65)
+    eval_train_arbitration_policy.add_argument("--target-runtime-sec", type=float)
+    eval_train_arbitration_policy.add_argument("--save")
     eval_train_spawn_policy = eval_sub.add_parser(
         "train-spawn-policy",
         help="Train an aggregated spawn policy from benchmark reports",
@@ -693,7 +755,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_train_memory_policy.add_argument("--save")
     eval_train_rl_policy = eval_sub.add_parser(
         "train-rl-policy",
-        help="Train RL-style depth + specialist policy updates with reward credit assignment",
+        help="Train RL-style depth + arbitration + specialist policy updates with reward credit assignment",
     )
     eval_train_rl_policy.add_argument("--reports", help="comma-separated report paths")
     eval_train_rl_policy.add_argument("--reports-dir")
@@ -719,7 +781,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_train_rl_spawn_policy.add_argument("--save")
     eval_autolearn = eval_sub.add_parser(
         "autolearn",
-        help="Run benchmark iterations and auto-update depth + specialist + spawn + memory policies from fresh telemetry",
+        help="Run benchmark iterations and auto-update depth + arbitration + specialist + spawn + memory policies from fresh telemetry",
     )
     eval_autolearn.add_argument("--dataset")
     eval_autolearn.add_argument("--mode", choices=["deep", "fast"], default="deep")
@@ -741,6 +803,10 @@ def build_parser() -> argparse.ArgumentParser:
     eval_autolearn.add_argument(
         "--specialist-policy-path",
         default="rim/eval/policies/specialist_policy.json",
+    )
+    eval_autolearn.add_argument(
+        "--arbitration-policy-path",
+        default="rim/eval/policies/arbitration_policy.json",
     )
     eval_autolearn.add_argument(
         "--spawn-policy-path",
@@ -781,6 +847,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_list(args))
     if args.command == "eval" and args.eval_command == "baseline":
         raise SystemExit(_cmd_eval_baseline(args))
+    if args.command == "eval" and args.eval_command == "baseline-llm":
+        raise SystemExit(asyncio.run(_cmd_eval_baseline_llm(args)))
     if args.command == "eval" and args.eval_command == "compare":
         raise SystemExit(_cmd_eval_compare(args))
     if args.command == "eval" and args.eval_command == "gate":
@@ -795,6 +863,8 @@ def main() -> None:
         raise SystemExit(_cmd_eval_train_policy(args))
     if args.command == "eval" and args.eval_command == "train-specialist-policy":
         raise SystemExit(_cmd_eval_train_specialist_policy(args))
+    if args.command == "eval" and args.eval_command == "train-arbitration-policy":
+        raise SystemExit(_cmd_eval_train_arbitration_policy(args))
     if args.command == "eval" and args.eval_command == "train-spawn-policy":
         raise SystemExit(_cmd_eval_train_spawn_policy(args))
     if args.command == "eval" and args.eval_command == "train-memory-policy":

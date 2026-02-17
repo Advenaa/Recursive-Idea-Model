@@ -388,16 +388,20 @@ class RunRepository:
         parsed = str(domain).strip()
         return parsed or None
 
-    def get_pending_runs(self, limit: int = 200) -> list[str]:
+    def get_pending_runs(self, limit: int = 200, *, include_running: bool = True) -> list[str]:
+        statuses = ["queued"]
+        if include_running:
+            statuses.append("running")
+        placeholders = ",".join("?" for _ in statuses)
         rows = self.conn.execute(
-            """
+            f"""
             SELECT id
             FROM runs
-            WHERE status IN ('queued', 'running')
+            WHERE status IN ({placeholders})
             ORDER BY created_at ASC
             LIMIT ?
             """,
-            (limit,),
+            (*statuses, limit),
         ).fetchall()
         return [str(row["id"]) for row in rows]
 

@@ -143,6 +143,8 @@ def test_pending_runs_and_request_roundtrip(tmp_path: Path) -> None:
 
     pending = repo.get_pending_runs()
     assert pending == ["run-queued", "run-running"]
+    pending_queued_only = repo.get_pending_runs(include_running=False)
+    assert pending_queued_only == ["run-queued"]
     req = repo.get_run_request("run-queued")
     assert req is not None
     assert req["idea"] == "idea 1"
