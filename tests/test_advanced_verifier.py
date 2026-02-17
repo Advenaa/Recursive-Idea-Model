@@ -81,6 +81,77 @@ def test_advanced_verifier_flags_failures_and_errors(tmp_path: Path) -> None:
     assert any("Unknown variable" in str(item.get("error")) for item in payload["checks"])
 
 
+def test_advanced_verifier_supports_http_data_reference_via_url_option(
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    class _FakeResponse:
+        def __init__(self, text: str) -> None:
+            self._payload = text.encode("utf-8")
+
+        def read(self, size: int = -1) -> bytes:
+            if size < 0:
+                return self._payload
+            return self._payload[:size]
+
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+            return False
+
+    def fake_urlopen(request, timeout=0):  # noqa: ANN001, ANN202
+        _ = request
+        _ = timeout
+        return _FakeResponse("compliance audit controls staged rollout")
+
+    monkeypatch.setattr(advanced_verifier_module, "urlopen", fake_urlopen)
+    synthesis = {
+        "synthesized_idea": "Include compliance audit controls and staged rollout.",
+        "changes_summary": ["add audit controls"],
+        "residual_risks": [],
+        "next_experiments": ["run staged pilot"],
+        "confidence_score": 0.82,
+    }
+    payload = run_advanced_verification(
+        constraints=[
+            "data: compliance,audit | url=https://example.com/reference.txt | min_overlap=0.5",
+        ],
+        synthesis=synthesis,
+        findings=[],
+        max_checks=3,
+        allow_http_data_reference=True,
+        http_data_timeout_sec=2,
+        http_data_max_bytes=4096,
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 0
+    check = payload["checks"][0]
+    assert check["check_type"] == "data_reference"
+    assert check["result"]["source_kind"] == "url"
+    assert check["result"]["source"] == "https://example.com/reference.txt"
+
+
+def test_advanced_verifier_rejects_http_data_reference_when_disabled() -> None:
+    synthesis = {
+        "synthesized_idea": "Include compliance audit controls.",
+        "changes_summary": [],
+        "residual_risks": [],
+        "next_experiments": [],
+        "confidence_score": 0.8,
+    }
+    payload = run_advanced_verification(
+        constraints=[
+            "data: compliance,audit | url=https://example.com/reference.txt | min_overlap=0.5",
+        ],
+        synthesis=synthesis,
+        findings=[],
+        max_checks=3,
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 1
+    assert "disabled" in str(payload["checks"][0].get("error")).lower()
+
+
 def test_advanced_verifier_skips_when_no_prefixed_checks() -> None:
     payload = run_advanced_verification(
         constraints=["plain natural language constraint"],

@@ -568,6 +568,22 @@ class RimExecutionEngine:
             advanced_verify_external_data_cmd = os.getenv(
                 "RIM_ADV_VERIFY_EXTERNAL_DATA_CMD"
             )
+            advanced_verify_allow_http_data = _parse_bool_env(
+                "RIM_ADV_VERIFY_ALLOW_HTTP_DATA",
+                False,
+            )
+            advanced_verify_http_timeout_sec = _parse_int_env(
+                "RIM_ADV_VERIFY_HTTP_TIMEOUT_SEC",
+                5,
+                lower=1,
+                upper=120,
+            )
+            advanced_verify_http_max_bytes = _parse_int_env(
+                "RIM_ADV_VERIFY_HTTP_MAX_BYTES",
+                300_000,
+                lower=1_024,
+                upper=5_000_000,
+            )
             memory_policy_path = str(os.getenv("RIM_MEMORY_POLICY_PATH", "")).strip()
             memory_policy_env: dict[str, object] = {}
             memory_policy_error: str | None = None
@@ -1411,6 +1427,9 @@ class RimExecutionEngine:
                         external_simulation_cmd=advanced_verify_external_simulation_cmd,
                         external_data_cmd=advanced_verify_external_data_cmd,
                         external_timeout_sec=advanced_verify_external_timeout_sec,
+                        allow_http_data_reference=advanced_verify_allow_http_data,
+                        http_data_timeout_sec=advanced_verify_http_timeout_sec,
+                        http_data_max_bytes=advanced_verify_http_max_bytes,
                     )
                     self.repository.log_stage(
                         run_id=run_id,
@@ -1432,6 +1451,9 @@ class RimExecutionEngine:
                             "external_data_enabled": bool(
                                 str(advanced_verify_external_data_cmd or "").strip()
                             ),
+                            "http_data_enabled": advanced_verify_allow_http_data,
+                            "http_data_timeout_sec": advanced_verify_http_timeout_sec,
+                            "http_data_max_bytes": advanced_verify_http_max_bytes,
                             **advanced_verification["summary"],
                         },
                     )

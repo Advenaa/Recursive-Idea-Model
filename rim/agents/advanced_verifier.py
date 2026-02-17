@@ -3,12 +3,14 @@ from __future__ import annotations
 import ast
 import json
 import os
-import shlex
 import subprocess
 import random
 import re
+import shlex
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from rim.core.schemas import CriticFinding
 
@@ -786,11 +788,48 @@ def _resolve_data_path(path: str | None, default_data_path: str | None) -> Path 
     return resolved if resolved.exists() else None
 
 
+def _is_http_url(value: str | None) -> bool:
+    text = str(value or "").strip().lower()
+    return text.startswith("https://") or text.startswith("http://")
+
+
+def _fetch_http_text(
+    *,
+    source_url: str,
+    timeout_sec: int,
+    max_bytes: int,
+) -> tuple[str | None, str | None]:
+    normalized_url = str(source_url or "").strip()
+    if not normalized_url:
+        return None, "missing source URL"
+    try:
+        request = Request(
+            normalized_url,
+            headers={"User-Agent": "RIM-AdvancedVerifier/1.0"},
+        )
+        with urlopen(request, timeout=max(1, int(timeout_sec))) as response:
+            raw = response.read(max(1, int(max_bytes)) + 1)
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
+        return None, str(exc)
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc)
+    if len(raw) > int(max_bytes):
+        return None, f"HTTP data exceeds max bytes ({max_bytes})"
+    try:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        decoded = raw.decode("utf-8", errors="replace")
+    return decoded, None
+
+
 def _run_data_reference_check(
     payload: str,
     synthesis: dict[str, object],
     *,
     default_data_path: str | None = None,
+    allow_http: bool = False,
+    http_timeout_sec: int = 5,
+    http_max_bytes: int = 300_000,
 ) -> dict[str, object]:
     terms_segment, options = _split_payload(payload)
     terms = [str(item).strip().lower() for item in terms_segment.split(",") if str(item).strip()]
@@ -802,25 +841,63 @@ def _run_data_reference_check(
             "result": None,
             "error": "missing data terms",
         }
-    source_path = _resolve_data_path(options.get("path"), default_data_path)
-    if source_path is None:
-        return {
-            "check_type": "data_reference",
-            "terms": terms,
-            "passed": False,
-            "result": None,
-            "error": "reference dataset path is missing or does not exist",
-        }
-    try:
-        corpus_text = source_path.read_text(encoding="utf-8")
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "check_type": "data_reference",
-            "terms": terms,
-            "passed": False,
-            "result": None,
-            "error": str(exc),
-        }
+    path_option = str(options.get("path") or "").strip()
+    url_option = str(options.get("url") or "").strip()
+    source_url = url_option
+    if not source_url and _is_http_url(path_option):
+        source_url = path_option
+    if not source_url and _is_http_url(default_data_path):
+        source_url = str(default_data_path or "").strip()
+
+    source_path: Path | None = None
+    corpus_text = ""
+    source_kind = "path"
+    source_value = ""
+    if source_url:
+        if not allow_http:
+            return {
+                "check_type": "data_reference",
+                "terms": terms,
+                "passed": False,
+                "result": None,
+                "error": "HTTP data references are disabled (set allow_http_data_reference).",
+            }
+        corpus_text, fetch_error = _fetch_http_text(
+            source_url=source_url,
+            timeout_sec=max(1, int(http_timeout_sec)),
+            max_bytes=max(1, int(http_max_bytes)),
+        )
+        if fetch_error is not None or corpus_text is None:
+            return {
+                "check_type": "data_reference",
+                "terms": terms,
+                "passed": False,
+                "result": None,
+                "error": str(fetch_error or "failed to fetch HTTP data reference"),
+            }
+        source_kind = "url"
+        source_value = source_url
+    else:
+        source_path = _resolve_data_path(path_option, default_data_path)
+        if source_path is None:
+            return {
+                "check_type": "data_reference",
+                "terms": terms,
+                "passed": False,
+                "result": None,
+                "error": "reference dataset path is missing or does not exist",
+            }
+        try:
+            corpus_text = source_path.read_text(encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "check_type": "data_reference",
+                "terms": terms,
+                "passed": False,
+                "result": None,
+                "error": str(exc),
+            }
+        source_value = str(source_path)
     reference_tokens = _tokenize(corpus_text)
     synthesis_tokens = _tokenize(_synthesis_text(synthesis))
     matched_terms: list[str] = []
@@ -845,7 +922,8 @@ def _run_data_reference_check(
             "term_overlap": round(overlap, 4),
             "min_overlap": min_overlap,
             "mode": mode,
-            "source_path": str(source_path),
+            "source_kind": source_kind,
+            "source": source_value,
         },
         "error": None,
     }
@@ -865,6 +943,9 @@ def run_advanced_verification(
     external_simulation_cmd: str | None = None,
     external_data_cmd: str | None = None,
     external_timeout_sec: int = 8,
+    allow_http_data_reference: bool = False,
+    http_data_timeout_sec: int = 5,
+    http_data_max_bytes: int = 300_000,
 ) -> dict[str, object]:
     checks = _extract_advanced_checks(constraints, max_checks=max_checks)
     context = _verification_context(synthesis=synthesis, findings=findings)
@@ -946,6 +1027,9 @@ def run_advanced_verification(
                         payload,
                         synthesis,
                         default_data_path=data_reference_path,
+                        allow_http=allow_http_data_reference,
+                        http_timeout_sec=http_data_timeout_sec,
+                        http_max_bytes=http_data_max_bytes,
                     )
                 )
             continue
