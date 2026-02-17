@@ -17,6 +17,7 @@ from rim.agents.synthesizer import synthesize_idea
 from rim.agents.verification import verify_synthesis
 from rim.core.depth_allocator import decide_next_cycle, severity_counts
 from rim.core.memory_folding import fold_cycle_memory, fold_to_memory_entries
+from rim.core.memory_quality import adapt_memory_fold_policy
 from rim.core.modes import get_mode_settings
 from rim.core.schemas import (
     AnalyzeRequest,
@@ -581,6 +582,59 @@ class RimExecutionEngine:
                     lower=0.0,
                     upper=1.0,
                 )
+            memory_quality_controller_enabled = _parse_bool_env(
+                "RIM_ENABLE_MEMORY_QUALITY_CONTROLLER",
+                request.mode == "deep",
+            )
+            memory_quality_lookback_runs = _parse_int_env(
+                "RIM_MEMORY_QUALITY_LOOKBACK_RUNS",
+                24,
+                lower=1,
+                upper=500,
+            )
+            memory_quality_min_folds = _parse_int_env(
+                "RIM_MEMORY_QUALITY_MIN_FOLDS",
+                4,
+                lower=1,
+                upper=200,
+            )
+            memory_quality_telemetry = {
+                "lookback_runs": memory_quality_lookback_runs,
+                "run_count": 0,
+                "fold_count": 0,
+                "degradation_count": 0,
+                "degradation_rate": 0.0,
+                "avg_novelty_ratio": 0.0,
+                "avg_duplicate_ratio": 0.0,
+            }
+            memory_quality_adjustment = {
+                "applied": False,
+                "reason": "controller_disabled",
+                "fold_count": 0,
+                "min_folds": memory_quality_min_folds,
+                "quality_pressure": 0.0,
+                "components": {
+                    "degradation": 0.0,
+                    "low_novelty": 0.0,
+                    "high_duplicate": 0.0,
+                },
+            }
+            if memory_quality_controller_enabled:
+                memory_quality_telemetry = self.repository.get_recent_memory_fold_telemetry(
+                    lookback_runs=memory_quality_lookback_runs,
+                )
+                (
+                    memory_fold_max_entries_default,
+                    memory_fold_novelty_floor_default,
+                    memory_fold_max_duplicate_ratio_default,
+                    memory_quality_adjustment,
+                ) = adapt_memory_fold_policy(
+                    base_max_entries=memory_fold_max_entries_default,
+                    base_novelty_floor=memory_fold_novelty_floor_default,
+                    base_max_duplicate_ratio=memory_fold_max_duplicate_ratio_default,
+                    telemetry=memory_quality_telemetry,
+                    min_folds=memory_quality_min_folds,
+                )
             enable_memory_folding = _parse_bool_env(
                 "RIM_ENABLE_MEMORY_FOLDING",
                 memory_folding_default,
@@ -725,6 +779,35 @@ class RimExecutionEngine:
                     "memory_policy_applied": bool(memory_policy_env),
                     "memory_policy_path": memory_policy_path or None,
                     "memory_policy_error": memory_policy_error,
+                    "memory_fold_enabled": enable_memory_folding,
+                    "memory_fold_max_entries": memory_fold_max_entries,
+                    "memory_fold_novelty_floor": memory_fold_novelty_floor,
+                    "memory_fold_max_duplicate_ratio": memory_fold_max_duplicate_ratio,
+                    "memory_quality_controller_enabled": memory_quality_controller_enabled,
+                    "memory_quality_controller_applied": bool(
+                        memory_quality_adjustment.get("applied", False)
+                    ),
+                    "memory_quality_controller_reason": memory_quality_adjustment.get("reason"),
+                    "memory_quality_controller_quality_pressure": memory_quality_adjustment.get(
+                        "quality_pressure",
+                        0.0,
+                    ),
+                    "memory_quality_lookback_runs": memory_quality_lookback_runs,
+                    "memory_quality_min_folds": memory_quality_min_folds,
+                    "memory_quality_run_count": memory_quality_telemetry.get("run_count", 0),
+                    "memory_quality_fold_count": memory_quality_telemetry.get("fold_count", 0),
+                    "memory_quality_degradation_rate": memory_quality_telemetry.get(
+                        "degradation_rate",
+                        0.0,
+                    ),
+                    "memory_quality_avg_novelty_ratio": memory_quality_telemetry.get(
+                        "avg_novelty_ratio",
+                        0.0,
+                    ),
+                    "memory_quality_avg_duplicate_ratio": memory_quality_telemetry.get(
+                        "avg_duplicate_ratio",
+                        0.0,
+                    ),
                     "arbitration_policy_applied": bool(arbitration_policy_env),
                     "arbitration_policy_path": arbitration_policy_path or None,
                     "arbitration_policy_error": arbitration_policy_error,
@@ -1226,9 +1309,23 @@ class RimExecutionEngine:
                             )[:4],
                             "novelty_ratio": fold_quality.get("novelty_ratio", 0.0),
                             "duplicate_ratio": fold_quality.get("duplicate_ratio", 0.0),
+                            "max_entries": memory_fold_max_entries,
+                            "novelty_floor": memory_fold_novelty_floor,
+                            "max_duplicate_ratio": memory_fold_max_duplicate_ratio,
                             "memory_policy_applied": bool(memory_policy_env),
                             "memory_policy_path": memory_policy_path or None,
                             "memory_policy_error": memory_policy_error,
+                            "memory_quality_controller_enabled": memory_quality_controller_enabled,
+                            "memory_quality_controller_applied": bool(
+                                memory_quality_adjustment.get("applied", False)
+                            ),
+                            "memory_quality_controller_reason": memory_quality_adjustment.get(
+                                "reason"
+                            ),
+                            "memory_quality_controller_quality_pressure": memory_quality_adjustment.get(
+                                "quality_pressure",
+                                0.0,
+                            ),
                         },
                     )
                 else:

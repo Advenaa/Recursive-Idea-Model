@@ -226,6 +226,10 @@ export RIM_ENABLE_MEMORY_FOLDING=1
 export RIM_MEMORY_FOLD_MAX_ENTRIES=12
 export RIM_MEMORY_FOLD_NOVELTY_FLOOR=0.35
 export RIM_MEMORY_FOLD_MAX_DUPLICATE_RATIO=0.5
+# Runtime long-horizon memory quality guardrails (auto-tighten fold params on degradation trends)
+export RIM_ENABLE_MEMORY_QUALITY_CONTROLLER=1
+export RIM_MEMORY_QUALITY_LOOKBACK_RUNS=24
+export RIM_MEMORY_QUALITY_MIN_FOLDS=4
 # Optional trained memory policy file from `rim eval train-memory-policy` output
 export RIM_MEMORY_POLICY_PATH=rim/eval/policies/memory_policy.json
 export RIM_ENABLE_DISAGREEMENT_ARBITRATION=1

@@ -116,6 +116,51 @@ def test_stage_logs_roundtrip(tmp_path: Path) -> None:
     assert logs[0]["meta"]["node_count"] == 4
 
 
+def test_recent_memory_fold_telemetry_aggregates_metrics(tmp_path: Path) -> None:
+    db_path = tmp_path / "rim_test.db"
+    repo = RunRepository(db_path=db_path)
+    repo.create_run_with_request(
+        run_id="run-telemetry-1",
+        mode="deep",
+        input_idea="idea-1",
+        request_json='{"idea":"idea-1","mode":"deep"}',
+        status="completed",
+    )
+    repo.create_run_with_request(
+        run_id="run-telemetry-2",
+        mode="deep",
+        input_idea="idea-2",
+        request_json='{"idea":"idea-2","mode":"deep"}',
+        status="completed",
+    )
+    repo.log_stage(
+        run_id="run-telemetry-1",
+        stage="memory_fold",
+        status="completed",
+        meta={"degradation_detected": True, "novelty_ratio": 0.4, "duplicate_ratio": 0.3},
+    )
+    repo.log_stage(
+        run_id="run-telemetry-1",
+        stage="memory_fold",
+        status="completed",
+        meta={"degradation_detected": True, "novelty_ratio": 0.2, "duplicate_ratio": 0.7},
+    )
+    repo.log_stage(
+        run_id="run-telemetry-2",
+        stage="memory_fold",
+        status="completed",
+        meta={"degradation_detected": False, "novelty_ratio": 0.6, "duplicate_ratio": 0.2},
+    )
+
+    telemetry = repo.get_recent_memory_fold_telemetry(lookback_runs=10)
+    assert telemetry["run_count"] == 2
+    assert telemetry["fold_count"] == 3
+    assert telemetry["degradation_count"] == 2
+    assert telemetry["degradation_rate"] == 0.6667
+    assert telemetry["avg_novelty_ratio"] == 0.4
+    assert telemetry["avg_duplicate_ratio"] == 0.4
+
+
 def test_pending_runs_and_request_roundtrip(tmp_path: Path) -> None:
     db_path = tmp_path / "rim_test.db"
     repo = RunRepository(db_path=db_path)

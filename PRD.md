@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn + engine modularization increments): `135` passing tests (`pytest -q`, February 17, 2026)
+- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn + engine modularization increments): `140` passing tests (`pytest -q`, February 17, 2026)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -260,6 +260,7 @@ Each run must return JSON with this minimum schema:
 - Add modular agent-pack registry + override surface for product-specific orchestration wiring (done on February 17, 2026)
 - Add config-driven agent pack loading + env selection (`RIM_AGENT_PACKS_PATH`, `RIM_AGENT_PACK`) so API/CLI can swap orchestration packs without code edits (done on February 17, 2026)
 - Add real single-call LLM baseline workflow (`rim eval baseline-llm`) for practical benchmark comparisons (done on February 17, 2026)
+- Add runtime long-horizon memory quality guardrails using recent memory-fold telemetry (`RIM_ENABLE_MEMORY_QUALITY_CONTROLLER` + lookback/fold thresholds) to auto-tighten fold parameters when degradation trends increase (done on February 17, 2026)
 
 ## 20) SOTA Alignment Status (vs `rim_paper_4.docx`)
 
@@ -284,11 +285,12 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Modular agent-pack registry (`EngineAgentRegistry`) with validated stage overrides for external product integration.
 - Config-driven pack loader (`load_agent_packs_config`) and env-based pack activation path used by API/CLI startup.
 - Real single-call LLM baseline path (`rim eval baseline-llm`) for practical comparisons against normal deep-thinking model calls.
+- Runtime long-horizon memory quality controller that reads recent fold telemetry and adaptively tightens fold parameters when degradation pressure rises.
 
 ### 20.2 Partially Implemented
 
 - Learning layer:
-  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version/degradation telemetry, offline memory-policy training (`rim eval train-memory-policy`), runtime policy loading (`RIM_MEMORY_POLICY_PATH`), and autolearn-driven online policy refresh (`rim eval autolearn`), but no long-horizon memory quality controller/meta-model for decomposition/challenge/synthesis policy updates.
+  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version/degradation telemetry, offline memory-policy training (`rim eval train-memory-policy`), runtime policy loading (`RIM_MEMORY_POLICY_PATH`), autolearn-driven online policy refresh (`rim eval autolearn`), and runtime long-horizon fold guardrails from recent telemetry (`RIM_ENABLE_MEMORY_QUALITY_CONTROLLER`, `RIM_MEMORY_QUALITY_LOOKBACK_RUNS`, `RIM_MEMORY_QUALITY_MIN_FOLDS`); no fully learned memory quality meta-model for decomposition/challenge/synthesis policy updates yet.
 - Orchestration depth/breadth policy:
   recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration/training (`rim eval calibrate`, `rim eval train-policy`), automated online update loop (`rim eval autolearn` with `RIM_DEPTH_POLICY_PATH`), and RL-style reward/advantage credit assignment (`rim eval train-rl-policy`) available; full PARL/ARPO/AEPO-grade policy optimization is still missing.
 - Challenge reconciliation:
@@ -302,7 +304,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 
 - Fully learned dynamic agent spawning and specialization (AgentSpawner-style policy-trained role/tool generation beyond current heuristic+RL-light role/tool policy updates).
 - Full neuro-symbolic verification loops (formal theorem/constraint tooling, simulation, and external data-backed execution).
-- Online long-horizon memory quality controls and adaptive fold policy optimization.
+- Fully learned long-horizon memory quality controller/meta-model and adaptive fold policy optimization across decomposition/challenge/synthesis.
 - Full RL-based orchestration training (PARL/ARPO/AEPO-style multi-agent policy optimization beyond current lightweight reward/advantage credit assignment).
 
 ### 20.4 Gap-Closure Priorities
@@ -311,7 +313,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 2. P0: evolve specialist arbitration from current heuristic+online+RL-light policy defaults to full RL adaptive specialist policy and dynamic role contracts.
 3. P1: evolve specialization from current heuristic + offline/RL-light spawn policies to fully learned dynamic role/tool generation contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
-5. P2: evolve memory from current episodic/working/tool stores + online policy refresh to long-horizon adaptive fold-quality optimization.
+5. P2: evolve memory from current episodic/working/tool stores + online policy refresh + telemetry-driven runtime guardrails to fully learned long-horizon adaptive fold-quality optimization.
 6. P3: evolve current offline heuristic policy training (`rim eval train-policy`) to learned policy optimization and credit assignment.
 
 ### 20.5 Delivery Stages for Paper Parity

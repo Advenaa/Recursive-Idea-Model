@@ -66,6 +66,13 @@ def _parse_error_summary(value: str | None) -> tuple[str | None, dict | None]:
     return message.strip(), payload
 
 
+def _parse_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 class RunRepository:
     def __init__(self, db_path: str | Path | None = None) -> None:
         self.conn = get_connection(db_path)
@@ -548,3 +555,69 @@ class RunRepository:
                 }
             )
         return logs
+
+    def get_recent_memory_fold_telemetry(self, lookback_runs: int = 24) -> dict:
+        limit = max(1, min(int(lookback_runs), 500))
+        run_rows = self.conn.execute(
+            """
+            SELECT id
+            FROM runs
+            WHERE status IN ('completed', 'partial')
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        run_ids = [str(row["id"]) for row in run_rows]
+        telemetry = {
+            "lookback_runs": limit,
+            "run_count": len(run_ids),
+            "fold_count": 0,
+            "degradation_count": 0,
+            "degradation_rate": 0.0,
+            "avg_novelty_ratio": 0.0,
+            "avg_duplicate_ratio": 0.0,
+        }
+        if not run_ids:
+            return telemetry
+
+        placeholders = ",".join("?" for _ in run_ids)
+        log_rows = self.conn.execute(
+            f"""
+            SELECT meta_json
+            FROM stage_logs
+            WHERE stage = 'memory_fold'
+              AND status = 'completed'
+              AND run_id IN ({placeholders})
+            """,
+            run_ids,
+        ).fetchall()
+        if not log_rows:
+            return telemetry
+
+        novelty_total = 0.0
+        duplicate_total = 0.0
+        fold_count = 0
+        degradation_count = 0
+        for row in log_rows:
+            meta_raw = str(row["meta_json"] or "{}")
+            try:
+                meta = json.loads(meta_raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(meta, dict):
+                continue
+            fold_count += 1
+            if bool(meta.get("degradation_detected")):
+                degradation_count += 1
+            novelty_total += _parse_float(meta.get("novelty_ratio"), 0.0)
+            duplicate_total += _parse_float(meta.get("duplicate_ratio"), 0.0)
+        if fold_count <= 0:
+            return telemetry
+
+        telemetry["fold_count"] = fold_count
+        telemetry["degradation_count"] = degradation_count
+        telemetry["degradation_rate"] = round(float(degradation_count) / float(fold_count), 4)
+        telemetry["avg_novelty_ratio"] = round(novelty_total / float(fold_count), 4)
+        telemetry["avg_duplicate_ratio"] = round(duplicate_total / float(fold_count), 4)
+        return telemetry
