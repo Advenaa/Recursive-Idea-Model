@@ -41,7 +41,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - Benchmark runner + canonical 20-idea dataset (`rim/eval/`)
 - Domain-weighted benchmark scoring + domain trend deltas (`rim/eval/runner.py`)
 - Blind-review packet generator for report evaluation (`rim eval blindpack`)
-- Deterministic single-pass baseline + regression gate (`rim eval baseline`, `rim eval gate`)
+- Deterministic baseline + real single-call LLM baselines + regression gate (`rim eval baseline`, `rim eval baseline-llm`, `rim eval gate`)
 - Local CLI entrypoint (`rim/cli.py`)
 
 Embed in another project:
@@ -56,6 +56,21 @@ orchestrator = build_orchestrator()
 request = AnalyzeRequest(idea="Your product idea", mode="deep")
 result = asyncio.run(orchestrator.analyze(request))
 print(result.synthesized_idea)
+```
+
+Custom agent packs for product-specific orchestration:
+
+```python
+from rim.engine import EngineAgentRegistry, build_engine
+
+registry = EngineAgentRegistry()
+custom_agents = registry.build(
+    overrides={
+        # replace any stage callable with your own implementation
+        # "run_critics": my_custom_critics,
+    }
+)
+engine = build_engine(agents=custom_agents, registry=registry)
 ```
 
 Quickstart:

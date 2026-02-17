@@ -6,7 +6,7 @@ Recursive Idea Model (RIM) MVP
 
 ## Version
 
-v0.1 (February 14, 2026)
+v0.1 (updated February 17, 2026)
 
 ## 1) Purpose
 
@@ -230,7 +230,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn increments): `118` passing tests (`pytest -q`)
+- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn + engine modularization increments): `132` passing tests (`pytest -q`, February 17, 2026)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -256,10 +256,13 @@ Each run must return JSON with this minimum schema:
 - Finalize a canonical 20-idea benchmark pack and blind-review process (done on February 14, 2026; `rim eval blindpack`)
 - Add explicit run cancel/retry controls in API and CLI (done on February 14, 2026)
 - Add richer evaluation analytics (domain-level trend and regression deltas added on February 14, 2026)
+- Add reusable embedding API (`rim.engine`) with composable builder functions for product integration (done on February 17, 2026)
+- Add modular agent-pack registry + override surface for product-specific orchestration wiring (done on February 17, 2026)
+- Add real single-call LLM baseline workflow (`rim eval baseline-llm`) for practical benchmark comparisons (done on February 17, 2026)
 
 ## 20) SOTA Alignment Status (vs `rim_paper_4.docx`)
 
-Status date: February 14, 2026
+Status date: February 17, 2026
 
 The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet complete.
 
@@ -275,6 +278,10 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Blind-review workflow for evaluator packets (`rim eval blindpack` + anonymized packet output).
 - Provider orchestration guardrails (fallbacks, retries, determinism controls, and run budgets).
 - Benchmark/eval workflow with baseline, compare, and gate.
+- Reusable execution runtime split from orchestration (`RimExecutionEngine` + thin `RimOrchestrator` adapter).
+- Public embedding API (`rim.engine`) with `build_engine`, `build_orchestrator`, and `build_agents`.
+- Modular agent-pack registry (`EngineAgentRegistry`) with validated stage overrides for external product integration.
+- Real single-call LLM baseline path (`rim eval baseline-llm`) for practical comparisons against normal deep-thinking model calls.
 
 ### 20.2 Partially Implemented
 
