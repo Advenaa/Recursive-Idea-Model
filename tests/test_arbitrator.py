@@ -25,9 +25,11 @@ class FakeRouter:
 class MultiRoundRouter:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.prompts: dict[str, str] = {}
 
     async def invoke_json(self, stage: str, prompt: str, json_schema=None):  # noqa: ANN001, ANN201
         self.calls.append(stage)
+        self.prompts[stage] = prompt
         if stage == "critic_arbitration":
             return (
                 {
@@ -179,14 +181,27 @@ def test_run_arbitration_runs_specialist_round_for_flagged_nodes() -> None:
             suggested_fix="Add gates",
             provider="claude",
         ),
+        CriticFinding(
+            node_id="n1",
+            critic_type="security",
+            issue="Rollback path lacks abuse-case controls",
+            severity="high",
+            confidence=0.74,
+            suggested_fix="Threat model rollback abuse vectors",
+            provider="codex",
+        ),
     ]
     reconciliation = {
         "disagreements": [
             {
                 "node_id": "n1",
-                "issue_count": 2,
-                "issues": ["No rollout criteria", "Unclear deployment gating"],
-                "critic_types": ["logic", "execution"],
+                "issue_count": 3,
+                "issues": [
+                    "No rollout criteria",
+                    "Unclear deployment gating",
+                    "Rollback path lacks abuse-case controls",
+                ],
+                "critic_types": ["logic", "execution", "security"],
             }
         ],
         "diversity_guardrails": {
@@ -201,6 +216,30 @@ def test_run_arbitration_runs_specialist_round_for_flagged_nodes() -> None:
             ]
         },
     }
+    specialist_contracts = [
+        {
+            "role": "finance",
+            "stage": "critic_finance",
+            "critic_type": "finance",
+            "score": 2.0,
+            "matched_keywords": ["budget", "margin"],
+            "tool_contract": {
+                "tools": ["unit_economics_model", "pricing_stress_test"],
+                "routing_policy": "prioritize_margin_and_budget_constraints",
+            },
+        },
+        {
+            "role": "security",
+            "stage": "critic_security",
+            "critic_type": "security",
+            "score": 3.3,
+            "matched_keywords": ["abuse", "rollback", "controls"],
+            "tool_contract": {
+                "tools": ["threat_model", "policy_checklist"],
+                "routing_policy": "prioritize_high_severity_and_compliance_constraints",
+            },
+        },
+    ]
     router = MultiRoundRouter()
     arbitrations, providers = asyncio.run(
         run_arbitration(
@@ -211,8 +250,19 @@ def test_run_arbitration_runs_specialist_round_for_flagged_nodes() -> None:
             specialist_loop_enabled=True,
             specialist_max_jobs=2,
             specialist_min_confidence=0.95,
+            specialist_contracts=specialist_contracts,
         )
     )
     assert "critic_arbitration_specialist" in router.calls
-    assert any(item.get("round") == "specialist" for item in arbitrations)
+    specialist_round = next(item for item in arbitrations if item.get("round") == "specialist")
+    assert specialist_round["specialist_role"] == "security"
+    assert specialist_round["specialist_critic_type"] == "security"
+    assert specialist_round["specialist_stage"] == "critic_security"
+    assert specialist_round["specialist_routing_policy"] == (
+        "prioritize_high_severity_and_compliance_constraints"
+    )
+    assert "threat_model" in specialist_round["specialist_tools"]
+    assert float(specialist_round["specialist_match_score"]) > 0.0
+    assert "Assigned specialist contract" in router.prompts["critic_arbitration_specialist"]
+    assert "critic_security" in router.prompts["critic_arbitration_specialist"]
     assert providers[-1] in {"codex", "claude"}

@@ -262,6 +262,7 @@ Each run must return JSON with this minimum schema:
 - Add real single-call LLM baseline workflow (`rim eval baseline-llm`) for practical benchmark comparisons (done on February 17, 2026)
 - Add runtime long-horizon memory quality guardrails using recent memory-fold telemetry (`RIM_ENABLE_MEMORY_QUALITY_CONTROLLER` + lookback/fold thresholds) to auto-tighten fold parameters when degradation trends increase (done on February 17, 2026)
 - Add native formal constraint checks (`formal:` / `theorem:` / `constraint:`) with z3-first symbolic solving, prove/satisfiable/refute modes, assumptions (`assume=`), counterexample traces on failed proofs, and controlled AST fallback (`RIM_ADV_VERIFY_SOLVER_BACKEND`, `RIM_ADV_VERIFY_FORMAL_ALLOW_AST_FALLBACK`, `RIM_ADV_VERIFY_FORMAL_MAX_COUNT`) (done on February 17, 2026)
+- Add contract-aware specialist arbitration that reuses spawn-plan role/tool contracts per flagged disagreement node and emits specialist contract metadata in arbitration outputs/logs (done on February 17, 2026)
 
 ## 20) SOTA Alignment Status (vs `rim_paper_4.docx`)
 
@@ -288,6 +289,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Real single-call LLM baseline path (`rim eval baseline-llm`) for practical comparisons against normal deep-thinking model calls.
 - Runtime long-horizon memory quality controller that reads recent fold telemetry and adaptively tightens fold parameters when degradation pressure rises.
 - Native formal symbolic constraint checks in advanced verification (`formal:` / `theorem:` / `constraint:`) with z3-first backend, prove/satisfiable/refute modes, assumptions, bounded symbolic domains, counterexample traces, and explicit fallback controls.
+- Contract-aware specialist arbitration that scores spawned specialist contracts per disagreement node, injects role/tool routing context into specialist arbitration prompts, and records selected specialist contract metadata.
 
 ### 20.2 Partially Implemented
 
@@ -296,7 +298,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 - Orchestration depth/breadth policy:
   recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration/training (`rim eval calibrate`, `rim eval train-policy`), automated online update loop (`rim eval autolearn` with `RIM_DEPTH_POLICY_PATH`), and RL-style reward/advantage credit assignment (`rim eval train-rl-policy`) available; full PARL/ARPO/AEPO-grade policy optimization is still missing.
 - Challenge reconciliation:
-  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, specialist follow-up arbitration loops, benchmark telemetry capture, offline arbitration/specialist policy training (`rim eval train-arbitration-policy`, `rim eval train-specialist-policy` + `RIM_ARBITRATION_POLICY_PATH`, `RIM_SPECIALIST_POLICY_PATH`), automated online arbitration/specialist updates (`rim eval autolearn`), and RL-style reward/advantage arbitration + specialist credit assignment (`rim eval train-rl-policy`) are implemented; full multi-agent RL arbitration training remains missing.
+  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, specialist follow-up arbitration loops with contract-aware spawn-plan role/tool routing, benchmark telemetry capture, offline arbitration/specialist policy training (`rim eval train-arbitration-policy`, `rim eval train-specialist-policy` + `RIM_ARBITRATION_POLICY_PATH`, `RIM_SPECIALIST_POLICY_PATH`), automated online arbitration/specialist updates (`rim eval autolearn`), and RL-style reward/advantage arbitration + specialist credit assignment (`rim eval train-rl-policy`) are implemented; full multi-agent RL arbitration training remains missing.
 - Verification layer:
   deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, baseline advanced adapters (`solver:`, `simulate:`, `data:`), native formal symbolic checks (`formal:`/`theorem:`/`constraint:` with z3-first backend, proof modes, assumptions, and counterexample traces), and pluggable external adapter command hooks are implemented; full theorem-prover-grade verification loops and production external integrations are still missing.
 - Specialization layer:
@@ -312,8 +314,8 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 ### 20.4 Gap-Closure Priorities
 
 1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration and automated policy updates (`rim eval calibrate`, `rim eval calibrate-loop`, `rim eval autolearn` implemented).
-2. P0: evolve specialist arbitration from current heuristic+online+RL-light policy defaults to full RL adaptive specialist policy and dynamic role contracts.
-3. P1: evolve specialization from current heuristic + offline/RL-light spawn policies to fully learned dynamic role/tool generation contracts.
+2. P0: evolve specialist arbitration from current heuristic+online+RL-light policy defaults (now contract-aware using spawn-plan role/tool contracts) to full RL adaptive specialist policy and learned role-contract generation.
+3. P1: evolve specialization from current heuristic + offline/RL-light spawn policies and static/dynamic token rules to fully learned dynamic role/tool generation contracts.
 4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
 5. P2: evolve memory from current episodic/working/tool stores + online policy refresh + telemetry-driven runtime guardrails to fully learned long-horizon adaptive fold-quality optimization.
 6. P3: evolve current offline heuristic policy training (`rim eval train-policy`) to learned policy optimization and credit assignment.

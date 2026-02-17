@@ -839,13 +839,23 @@ class RimExecutionEngine:
                 constraints=request.constraints,
                 memory_context=memory_context,
             )
+            spawned_specialist_contracts = [
+                item
+                for item in list(spawn_plan.get("extra_critics") or [])
+                if isinstance(item, dict)
+            ]
             spawned_extra_critics = [
                 (str(item["stage"]), str(item["critic_type"]))
-                for item in list(spawn_plan.get("extra_critics") or [])
+                for item in spawned_specialist_contracts
                 if isinstance(item, dict)
                 and str(item.get("stage") or "").strip()
                 and str(item.get("critic_type") or "").strip()
             ]
+            spawned_specialist_roles = [
+                str(item.get("role") or "").strip()
+                for item in spawned_specialist_contracts
+                if str(item.get("role") or "").strip()
+            ][:8]
             self.repository.log_stage(
                 run_id=run_id,
                 stage="specialization_spawn",
@@ -959,6 +969,7 @@ class RimExecutionEngine:
                             specialist_loop_enabled=enable_specialist_arbitration_loop,
                             specialist_max_jobs=specialist_arbitration_max_jobs,
                             specialist_min_confidence=specialist_arbitration_min_confidence,
+                            specialist_contracts=spawned_specialist_contracts,
                         )
                         devils_advocate_count = len(
                             [
@@ -1004,6 +1015,8 @@ class RimExecutionEngine:
                                 "specialist_max_jobs": specialist_arbitration_max_jobs,
                                 "specialist_min_confidence": specialist_arbitration_min_confidence,
                                 "specialist_count": specialist_count,
+                                "specialist_contract_count": len(spawned_specialist_contracts),
+                                "specialist_contract_roles": spawned_specialist_roles,
                                 "specialist_policy_applied": bool(specialist_policy_env),
                                 "specialist_policy_path": specialist_policy_path or None,
                                 "specialist_policy_error": specialist_policy_error,
@@ -1032,6 +1045,8 @@ class RimExecutionEngine:
                                 "specialist_loop_enabled": enable_specialist_arbitration_loop,
                                 "specialist_max_jobs": specialist_arbitration_max_jobs,
                                 "specialist_min_confidence": specialist_arbitration_min_confidence,
+                                "specialist_contract_count": len(spawned_specialist_contracts),
+                                "specialist_contract_roles": spawned_specialist_roles,
                                 "specialist_policy_applied": bool(specialist_policy_env),
                                 "specialist_policy_path": specialist_policy_path or None,
                                 "specialist_policy_error": specialist_policy_error,

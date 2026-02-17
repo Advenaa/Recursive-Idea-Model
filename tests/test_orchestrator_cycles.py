@@ -575,6 +575,7 @@ def test_orchestrator_applies_specialist_policy_file(
         specialist_loop_enabled,
         specialist_max_jobs,
         specialist_min_confidence,
+        specialist_contracts,
     ):
         captured["max_jobs"] = max_jobs
         captured["devils_advocate_rounds"] = devils_advocate_rounds
@@ -582,6 +583,7 @@ def test_orchestrator_applies_specialist_policy_file(
         captured["specialist_loop_enabled"] = specialist_loop_enabled
         captured["specialist_max_jobs"] = specialist_max_jobs
         captured["specialist_min_confidence"] = specialist_min_confidence
+        captured["specialist_contract_count"] = len(list(specialist_contracts or []))
         captured["disagreement_count"] = int(reconciliation.get("summary", {}).get("disagreement_count", 0))
         captured["finding_count"] = len(findings)
         return (
@@ -711,11 +713,13 @@ def test_orchestrator_applies_arbitration_policy_file(
         specialist_loop_enabled,
         specialist_max_jobs,
         specialist_min_confidence,
+        specialist_contracts,
     ):
         captured["max_jobs"] = max_jobs
         captured["devils_advocate_rounds"] = devils_advocate_rounds
         captured["devils_advocate_min_confidence"] = devils_advocate_min_confidence
         captured["specialist_loop_enabled"] = specialist_loop_enabled
+        captured["specialist_contract_count"] = len(list(specialist_contracts or []))
         captured["disagreement_count"] = int(reconciliation.get("summary", {}).get("disagreement_count", 0))
         captured["finding_count"] = len(findings)
         return (

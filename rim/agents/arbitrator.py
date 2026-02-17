@@ -66,6 +66,9 @@ Return STRICT JSON only with:
 Node diversity flag:
 {flag}
 
+Assigned specialist contract:
+{specialist_contract}
+
 Target disagreement:
 {disagreement}
 
@@ -111,6 +114,186 @@ def _needs_specialist_pass(decision: dict[str, Any], min_confidence: float) -> b
     return action == "escalate"
 
 
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _normalize_specialist_contracts(
+    specialist_contracts: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in list(specialist_contracts or []):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        critic_type = str(item.get("critic_type") or "").strip()
+        stage = str(item.get("stage") or "").strip() or "critic_arbitration_specialist"
+        tool_contract = item.get("tool_contract")
+        if not isinstance(tool_contract, dict):
+            tool_contract = {}
+        tools: list[str] = []
+        seen_tools: set[str] = set()
+        for raw_tool in list(tool_contract.get("tools") or []):
+            tool = str(raw_tool or "").strip()
+            if not tool or tool in seen_tools:
+                continue
+            seen_tools.add(tool)
+            tools.append(tool)
+        routing_policy = str(tool_contract.get("routing_policy") or "generic").strip() or "generic"
+        matched_keywords: list[str] = []
+        for raw_keyword in list(item.get("matched_keywords") or []):
+            keyword = str(raw_keyword or "").strip().lower()
+            if keyword and keyword not in matched_keywords:
+                matched_keywords.append(keyword)
+        if not role and not critic_type:
+            continue
+        role_name = role or critic_type
+        critic_name = critic_type or role_name
+        normalized.append(
+            {
+                "role": role_name,
+                "critic_type": critic_name,
+                "stage": stage,
+                "tools": tools,
+                "routing_policy": routing_policy,
+                "score": round(_coerce_float(item.get("score"), 0.0), 3),
+                "matched_keywords": matched_keywords[:8],
+                "dynamic": bool(item.get("dynamic", False)),
+            }
+        )
+    return normalized
+
+
+def _specialist_match_score(
+    *,
+    contract: dict[str, Any],
+    disagreement: dict[str, Any],
+    findings: list[CriticFinding],
+) -> float:
+    role = str(contract.get("role") or "").strip().lower()
+    critic_type = str(contract.get("critic_type") or "").strip().lower()
+    base_score = round(_coerce_float(contract.get("score"), 0.0), 3)
+    matched_keywords = {
+        str(item or "").strip().lower()
+        for item in list(contract.get("matched_keywords") or [])
+        if str(item or "").strip()
+    }
+    disagreement_critic_types = {
+        str(item or "").strip().lower()
+        for item in list(disagreement.get("critic_types") or [])
+        if str(item or "").strip()
+    }
+    disagreement_text = " ".join(str(item) for item in list(disagreement.get("issues") or [])).lower()
+
+    score = 0.05 * base_score
+    if critic_type and critic_type in disagreement_critic_types:
+        score += 4.0
+    if role and role in disagreement_critic_types:
+        score += 2.0
+    if role and role in disagreement_text:
+        score += 0.9
+    if critic_type and critic_type in disagreement_text:
+        score += 0.9
+    if matched_keywords:
+        score += 0.2 * sum(1 for keyword in matched_keywords if keyword in disagreement_text)
+
+    for finding in findings:
+        finding_type = str(finding.critic_type or "").strip().lower()
+        if critic_type and finding_type == critic_type:
+            score += 2.5
+        if role and finding_type == role:
+            score += 1.5
+        finding_text = f"{finding.issue} {finding.suggested_fix}".lower()
+        if role and role in finding_text:
+            score += 0.5
+        if critic_type and critic_type in finding_text:
+            score += 0.5
+        if matched_keywords:
+            score += 0.25 * sum(1 for keyword in matched_keywords if keyword in finding_text)
+    return round(score, 3)
+
+
+def _select_specialist_contract(
+    *,
+    node_id: str,
+    disagreement: dict[str, Any],
+    findings: list[CriticFinding],
+    specialist_contracts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not specialist_contracts:
+        return None
+    node_findings = [item for item in findings if item.node_id == node_id]
+    ranked: list[tuple[float, float, int, str, dict[str, Any]]] = []
+    for contract in specialist_contracts:
+        match_score = _specialist_match_score(
+            contract=contract,
+            disagreement=disagreement,
+            findings=node_findings,
+        )
+        ranked.append(
+            (
+                match_score,
+                _coerce_float(contract.get("score"), 0.0),
+                len(list(contract.get("matched_keywords") or [])),
+                str(contract.get("role") or ""),
+                contract,
+            )
+        )
+    if not ranked:
+        return None
+    ranked.sort(reverse=True)
+    selected = dict(ranked[0][4])
+    selected["match_score"] = round(float(ranked[0][0]), 3)
+    return selected
+
+
+def _default_specialist_contract() -> dict[str, Any]:
+    return {
+        "role": "specialist",
+        "critic_type": "specialist",
+        "stage": "critic_arbitration_specialist",
+        "tools": ["consistency_check", "counterexample_search"],
+        "routing_policy": "prioritize_high_risk_disagreements",
+        "score": 0.0,
+        "matched_keywords": [],
+        "dynamic": False,
+        "match_score": 0.0,
+    }
+
+
+def _attach_specialist_metadata(
+    decision: dict[str, Any],
+    contract: dict[str, Any],
+) -> None:
+    tools: list[str] = []
+    seen_tools: set[str] = set()
+    for raw_tool in list(contract.get("tools") or []):
+        tool = str(raw_tool or "").strip()
+        if not tool or tool in seen_tools:
+            continue
+        seen_tools.add(tool)
+        tools.append(tool)
+    decision["specialist_role"] = str(contract.get("role") or "specialist")
+    decision["specialist_critic_type"] = str(
+        contract.get("critic_type") or decision["specialist_role"]
+    )
+    decision["specialist_stage"] = str(
+        contract.get("stage") or "critic_arbitration_specialist"
+    )
+    decision["specialist_routing_policy"] = str(
+        contract.get("routing_policy") or "generic"
+    )
+    decision["specialist_tools"] = tools
+    decision["specialist_dynamic"] = bool(contract.get("dynamic", False))
+    decision["specialist_match_score"] = round(
+        _coerce_float(contract.get("match_score"), 0.0),
+        3,
+    )
+
+
 async def run_arbitration(
     router: Any,
     *,
@@ -122,6 +305,7 @@ async def run_arbitration(
     specialist_loop_enabled: bool = False,
     specialist_max_jobs: int = 2,
     specialist_min_confidence: float = 0.78,
+    specialist_contracts: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     disagreements = list(reconciliation.get("disagreements") or [])[: max(0, int(max_jobs))]
     if not disagreements:
@@ -235,6 +419,7 @@ async def run_arbitration(
         flagged_nodes = list(guardrails.get("flagged_nodes") or [])
         normalized_specialist_max_jobs = max(0, int(specialist_max_jobs))
         normalized_specialist_conf = max(0.0, min(1.0, float(specialist_min_confidence)))
+        normalized_specialist_contracts = _normalize_specialist_contracts(specialist_contracts)
         jobs: list[tuple[str, dict[str, Any]]] = []
         for item in flagged_nodes:
             if not isinstance(item, dict):
@@ -254,6 +439,12 @@ async def run_arbitration(
         for node_id, flag in jobs:
             disagreement = disagreement_by_node.get(node_id, {"node_id": node_id})
             prior = latest_by_node.get(node_id, {"node_id": node_id})
+            specialist_contract = _select_specialist_contract(
+                node_id=node_id,
+                disagreement=disagreement,
+                findings=findings,
+                specialist_contracts=normalized_specialist_contracts,
+            ) or _default_specialist_contract()
             scoped_findings = [
                 {
                     "critic_type": item.critic_type,
@@ -266,6 +457,7 @@ async def run_arbitration(
             ][:8]
             prompt = SPECIALIST_ARBITRATION_PROMPT.format(
                 flag=flag,
+                specialist_contract=specialist_contract,
                 disagreement=disagreement,
                 prior_decision=prior,
                 findings=scoped_findings,
@@ -278,6 +470,7 @@ async def run_arbitration(
                 )
                 normalized = _normalize_arbitration(payload, node_id)
                 normalized["round"] = "specialist"
+                _attach_specialist_metadata(normalized, specialist_contract)
                 output.append(normalized)
                 latest_by_node[node_id] = normalized
                 providers.append(provider)
@@ -290,6 +483,7 @@ async def run_arbitration(
                     "confidence": min(0.3, float(prior.get("confidence") or 0.3)),
                     "round": "specialist",
                 }
+                _attach_specialist_metadata(fallback, specialist_contract)
                 output.append(fallback)
                 latest_by_node[node_id] = fallback
     return output, providers
