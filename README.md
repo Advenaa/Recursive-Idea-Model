@@ -31,7 +31,7 @@ The project default is **Deep mode**.
 The repository now includes a Python MVP scaffold under `rim/` with:
 
 - FastAPI service (`rim/api/app.py`)
-- Orchestrator pipeline with recursive stop conditions (`rim/core/orchestrator.py`)
+- Orchestrator adapter + reusable execution engine (`rim/core/orchestrator.py`, `rim/core/engine_runtime.py`)
 - Multi-round disagreement arbitration with devil's-advocate + specialist follow-up loops (`rim/agents/arbitrator.py`)
 - Advanced verification adapters (`solver:`, `simulate:`, `data:`) (`rim/agents/advanced_verifier.py`)
 - Scored specialist spawning with tool-routing contracts (`rim/agents/spawner.py`)
