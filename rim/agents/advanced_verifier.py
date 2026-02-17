@@ -17,6 +17,14 @@ _FORMAL_SOLVER_PREFIXES = ("formal:", "theorem:", "constraint:")
 _SIM_PREFIXES = ("simulate:", "simulation:")
 _DATA_PREFIXES = ("data:", "dataset:")
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]+")
+_FORMAL_COUNT_KEYS = (
+    "change_count",
+    "risk_count",
+    "experiment_count",
+    "finding_count",
+    "high_finding_count",
+    "critical_finding_count",
+)
 
 _ALLOWED_AST_NODES = (
     ast.Expression,
@@ -67,10 +75,11 @@ def _extract_advanced_checks(constraints: list[str] | None, max_checks: int) -> 
             if lowered.startswith(prefix):
                 matched = {"kind": "formal_solver", "payload": text[len(prefix) :].strip()}
                 break
-        for prefix in _SOLVER_PREFIXES:
-            if lowered.startswith(prefix):
-                matched = {"kind": "solver", "payload": text[len(prefix) :].strip()}
-                break
+        if matched is None:
+            for prefix in _SOLVER_PREFIXES:
+                if lowered.startswith(prefix):
+                    matched = {"kind": "solver", "payload": text[len(prefix) :].strip()}
+                    break
         if matched is None:
             for prefix in _SIM_PREFIXES:
                 if lowered.startswith(prefix):
@@ -130,6 +139,8 @@ def _z3_from_ast(node: ast.AST, context: dict[str, Any], z3: Any) -> Any:  # noq
             return z3.BoolVal(value)
         if isinstance(value, (int, float)):
             return z3.RealVal(float(value))
+        if hasattr(value, "sort"):
+            return value
         raise ValueError(f"Unsupported variable type for '{node.id}' in z3 backend")
     if isinstance(node, ast.UnaryOp):
         value = _z3_from_ast(node.operand, context, z3)
@@ -220,6 +231,101 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     return bool(default)
+
+
+def _parse_int_env(name: str, default: int, *, lower: int, upper: int) -> int:
+    raw = os.getenv(name)
+    try:
+        value = int(str(raw)) if raw is not None else int(default)
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(lower, min(upper, value))
+
+
+def _split_assumptions(raw: str | None) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    return [item for item in [part.strip() for part in text.split(";")] if item]
+
+
+def _z3_value_to_python(value: Any, z3: Any) -> object:  # noqa: ANN401
+    try:
+        if z3.is_true(value):
+            return True
+        if z3.is_false(value):
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    text = str(value)
+    if "/" in text:
+        left, _, right = text.partition("/")
+        try:
+            return float(left) / float(right)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return text
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return text
+
+
+def _formal_context_bounds(
+    *,
+    upper_bound: int,
+) -> dict[str, tuple[float, float]]:
+    bounds: dict[str, tuple[float, float]] = {
+        "confidence_score": (0.0, 1.0),
+    }
+    for key in _FORMAL_COUNT_KEYS:
+        bounds[key] = (0.0, float(max(1, int(upper_bound))))
+    return bounds
+
+
+def _context_fallback_formal_check(
+    *,
+    expression: str,
+    assumptions: list[str],
+    context: dict[str, Any],
+    mode: str,
+) -> dict[str, object]:
+    try:
+        assumptions_hold = all(_safe_eval_expression(item, context) for item in assumptions)
+        expression_holds = _safe_eval_expression(expression, context)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "check_type": "formal_solver",
+            "expression": expression,
+            "mode": mode,
+            "assumptions": assumptions,
+            "passed": False,
+            "result": None,
+            "error": str(exc),
+        }
+    if mode == "prove":
+        passed = (not assumptions_hold) or expression_holds
+    elif mode == "refute":
+        passed = assumptions_hold and (not expression_holds)
+    else:
+        passed = assumptions_hold and expression_holds
+    return {
+        "check_type": "formal_solver",
+        "expression": expression,
+        "mode": mode,
+        "assumptions": assumptions,
+        "passed": passed,
+        "result": {
+            "backend": "ast_context_fallback",
+            "assumptions_hold": assumptions_hold,
+            "expression_holds": expression_holds,
+            "mode": mode,
+        },
+        "error": None,
+    }
 
 
 def _verification_context(
@@ -330,6 +436,175 @@ def _run_solver_check(
             "result": None,
             "error": str(exc),
         }
+
+
+def _run_formal_solver_check(
+    payload: str,
+    context: dict[str, Any],
+    *,
+    allow_ast_fallback: bool,
+) -> dict[str, object]:
+    expression, options = _split_payload(payload)
+    expression = str(expression).strip()
+    if not expression:
+        return {
+            "check_type": "formal_solver",
+            "expression": "",
+            "mode": "prove",
+            "assumptions": [],
+            "passed": False,
+            "result": None,
+            "error": "missing formal solver expression",
+        }
+
+    mode = str(options.get("mode", "prove")).strip().lower()
+    if mode not in {"prove", "satisfiable", "refute"}:
+        return {
+            "check_type": "formal_solver",
+            "expression": expression,
+            "mode": mode,
+            "assumptions": [],
+            "passed": False,
+            "result": None,
+            "error": "formal mode must be one of: prove, satisfiable, refute",
+        }
+    assumptions = _split_assumptions(options.get("assume"))
+    upper_bound = _parse_int_env(
+        "RIM_ADV_VERIFY_FORMAL_MAX_COUNT",
+        200,
+        lower=1,
+        upper=100000,
+    )
+
+    try:
+        import z3  # type: ignore[import-not-found]
+    except Exception as exc:  # noqa: BLE001
+        if allow_ast_fallback:
+            result = _context_fallback_formal_check(
+                expression=expression,
+                assumptions=assumptions,
+                context=context,
+                mode=mode,
+            )
+            if result.get("error") is None and isinstance(result.get("result"), dict):
+                result_payload = dict(result["result"])
+                result_payload["fallback_reason"] = f"z3 unavailable: {exc}"
+                result["result"] = result_payload
+            return result
+        return {
+            "check_type": "formal_solver",
+            "expression": expression,
+            "mode": mode,
+            "assumptions": assumptions,
+            "passed": False,
+            "result": None,
+            "error": f"z3 backend unavailable: {exc}",
+        }
+
+    symbolic_context: dict[str, Any] = {
+        key: z3.Real(key) if key != "confidence_score" else z3.Real(key)
+        for key in context.keys()
+    }
+    bounds = _formal_context_bounds(upper_bound=upper_bound)
+    constraints: list[Any] = []
+    for key, symbol in symbolic_context.items():
+        if key not in bounds:
+            continue
+        lower, upper = bounds[key]
+        constraints.append(symbol >= float(lower))
+        constraints.append(symbol <= float(upper))
+    if {
+        "finding_count",
+        "high_finding_count",
+        "critical_finding_count",
+    }.issubset(symbolic_context.keys()):
+        constraints.append(
+            symbolic_context["finding_count"]
+            >= symbolic_context["high_finding_count"] + symbolic_context["critical_finding_count"]
+        )
+
+    try:
+        parsed_expression = _z3_from_ast(
+            ast.parse(expression, mode="eval"),
+            symbolic_context,
+            z3,
+        )
+        parsed_assumptions = [
+            _z3_from_ast(
+                ast.parse(item, mode="eval"),
+                symbolic_context,
+                z3,
+            )
+            for item in assumptions
+        ]
+    except Exception as exc:  # noqa: BLE001
+        if allow_ast_fallback:
+            fallback = _context_fallback_formal_check(
+                expression=expression,
+                assumptions=assumptions,
+                context=context,
+                mode=mode,
+            )
+            if fallback.get("error") is None and isinstance(fallback.get("result"), dict):
+                payload_result = dict(fallback["result"])
+                payload_result["fallback_reason"] = f"formal parse failure: {exc}"
+                fallback["result"] = payload_result
+            return fallback
+        return {
+            "check_type": "formal_solver",
+            "expression": expression,
+            "mode": mode,
+            "assumptions": assumptions,
+            "passed": False,
+            "result": None,
+            "error": str(exc),
+        }
+
+    solver = z3.Solver()
+    solver.add(*constraints)
+    solver.add(*parsed_assumptions)
+    if mode == "prove":
+        solver.add(z3.Not(parsed_expression))
+        solver_status = solver.check()
+        passed = solver_status == z3.unsat
+    elif mode == "refute":
+        solver.add(parsed_expression)
+        solver_status = solver.check()
+        passed = solver_status == z3.unsat
+    else:  # satisfiable
+        solver.add(parsed_expression)
+        solver_status = solver.check()
+        passed = solver_status == z3.sat
+
+    result_payload: dict[str, Any] = {
+        "backend": "z3_formal",
+        "mode": mode,
+        "solver_status": str(solver_status),
+        "assumption_count": len(assumptions),
+        "max_count_bound": upper_bound,
+    }
+    if not passed and solver_status == z3.sat:
+        model = solver.model()
+        counterexample: dict[str, object] = {}
+        for key, symbol in symbolic_context.items():
+            try:
+                counterexample[key] = _z3_value_to_python(
+                    model.eval(symbol, model_completion=True),
+                    z3,
+                )
+            except Exception:  # noqa: BLE001
+                continue
+        if counterexample:
+            result_payload["counterexample"] = counterexample
+    return {
+        "check_type": "formal_solver",
+        "expression": expression,
+        "mode": mode,
+        "assumptions": assumptions,
+        "passed": bool(passed),
+        "result": result_payload,
+        "error": None,
+    }
 
 
 def _normalize_external_command(command: str | None) -> list[str] | None:
@@ -625,12 +900,10 @@ def run_advanced_verification(
                 True,
             )
             results.append(
-                _run_solver_check(
+                _run_formal_solver_check(
                     payload,
                     context,
-                    backend="z3",
                     allow_ast_fallback=formal_fallback,
-                    check_type="formal_solver",
                 )
             )
             continue

@@ -188,7 +188,59 @@ def test_advanced_verifier_runs_formal_solver_with_z3_or_fallback(
     check = payload["checks"][0]
     assert check["check_type"] == "formal_solver"
     backend = ((check.get("result") or {}).get("backend") if isinstance(check.get("result"), dict) else None)
-    assert backend in {"z3", "ast_fallback"}
+    assert backend in {"z3_formal", "ast_context_fallback"}
+    assert check["mode"] == "prove"
+
+
+def test_advanced_verifier_formal_solver_returns_counterexample_for_failed_proof(
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    monkeypatch.delenv("RIM_ADV_VERIFY_FORMAL_ALLOW_AST_FALLBACK", raising=False)
+    synthesis = {
+        "synthesized_idea": "Idea",
+        "changes_summary": [],
+        "residual_risks": [],
+        "next_experiments": [],
+        "confidence_score": 0.8,
+    }
+    payload = run_advanced_verification(
+        constraints=[
+            "formal: risk_count < 0 | mode=prove | assume=confidence_score >= 0;confidence_score <= 1",
+        ],
+        synthesis=synthesis,
+        findings=[],
+        max_checks=3,
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 1
+    check = payload["checks"][0]
+    assert check["check_type"] == "formal_solver"
+    assert check["mode"] == "prove"
+    if isinstance(check.get("result"), dict) and check["result"].get("backend") == "z3_formal":
+        assert "counterexample" in check["result"]
+
+
+def test_advanced_verifier_formal_solver_supports_satisfiable_mode() -> None:
+    synthesis = {
+        "synthesized_idea": "Idea",
+        "changes_summary": [],
+        "residual_risks": [],
+        "next_experiments": [],
+        "confidence_score": 0.8,
+    }
+    payload = run_advanced_verification(
+        constraints=[
+            "formal: confidence_score >= 0.5 and risk_count >= 0 | mode=satisfiable",
+        ],
+        synthesis=synthesis,
+        findings=[],
+        max_checks=3,
+    )
+    assert payload["summary"]["total_checks"] == 1
+    assert payload["summary"]["failed_checks"] == 0
+    check = payload["checks"][0]
+    assert check["check_type"] == "formal_solver"
+    assert check["mode"] == "satisfiable"
 
 
 def test_advanced_verifier_formal_solver_can_disable_ast_fallback(
@@ -197,7 +249,7 @@ def test_advanced_verifier_formal_solver_can_disable_ast_fallback(
     monkeypatch.setenv("RIM_ADV_VERIFY_FORMAL_ALLOW_AST_FALLBACK", "0")
     monkeypatch.setattr(
         advanced_verifier_module,
-        "_safe_eval_z3",
+        "_z3_from_ast",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("z3 backend unavailable")),  # noqa: ARG005
     )
     synthesis = {
