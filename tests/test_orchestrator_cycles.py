@@ -621,6 +621,10 @@ def test_orchestrator_applies_specialist_policy_file(
                         "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": 1,
                         "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": 4,
                         "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": 0.91,
+                        "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER": 1,
+                        "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS": 18,
+                        "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS": 5,
+                        "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES": 3,
                     }
                 }
             }
@@ -642,6 +646,10 @@ def test_orchestrator_applies_specialist_policy_file(
     monkeypatch.delenv("RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP", raising=False)
     monkeypatch.delenv("RIM_SPECIALIST_ARBITRATION_MAX_JOBS", raising=False)
     monkeypatch.delenv("RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE", raising=False)
+    monkeypatch.delenv("RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER", raising=False)
+    monkeypatch.delenv("RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS", raising=False)
+    monkeypatch.delenv("RIM_SPECIALIST_CONTRACT_MIN_ROUNDS", raising=False)
+    monkeypatch.delenv("RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES", raising=False)
 
     repo = RunRepository(db_path=tmp_path / "rim_orchestrator_specialist_policy.db")
     orchestrator = RimOrchestrator(repository=repo, router=DummyRouter())  # type: ignore[arg-type]
@@ -662,6 +670,12 @@ def test_orchestrator_applies_specialist_policy_file(
     assert len(arbitration_logs) == 1
     assert arbitration_logs[0].meta["specialist_policy_applied"] is True
     assert arbitration_logs[0].meta["specialist_policy_path"] == str(policy_path)
+    queue_logs = [log for log in orchestrator.get_run_logs(run_id).logs if log.stage == "queue"]
+    assert len(queue_logs) == 1
+    assert queue_logs[0].meta["specialist_contract_controller_enabled"] is True
+    assert queue_logs[0].meta["specialist_contract_lookback_runs"] == 18
+    assert queue_logs[0].meta["specialist_contract_min_rounds"] == 5
+    assert queue_logs[0].meta["specialist_contract_min_role_samples"] == 3
 
 
 def test_orchestrator_applies_arbitration_policy_file(

@@ -329,6 +329,93 @@ def _normalize_tools(value: Any) -> list[str]:
     return tools
 
 
+def _normalize_action_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts = {
+        "merge": max(0, _to_int(value.get("merge"), 0)),
+        "escalate": max(0, _to_int(value.get("escalate"), 0)),
+        "drop": max(0, _to_int(value.get("drop"), 0)),
+    }
+    total = max(0, _to_int(value.get("total"), 0))
+    if total <= 0:
+        total = counts["merge"] + counts["escalate"] + counts["drop"]
+    if total <= 0:
+        return {}
+    counts["total"] = total
+    return counts
+
+
+def _normalize_role_action_counts(value: Any) -> dict[str, dict[str, int]]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, dict[str, int]] = {}
+    for key, item in value.items():
+        role = _normalize_role(key)
+        if not role:
+            continue
+        counts = _normalize_action_counts(item)
+        if counts:
+            normalized[role] = counts
+    return normalized
+
+
+def _normalize_role_score_map(
+    value: Any,
+    *,
+    lower: float = 0.0,
+    upper: float = 8.0,
+) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, float] = {}
+    for key, item in value.items():
+        role = _normalize_role(key)
+        if not role:
+            continue
+        normalized[role] = round(_clamp_float(_to_float(item, 0.0), lower, upper), 4)
+    return normalized
+
+
+def _normalize_dynamic_token(value: Any) -> str:
+    token = _normalize_role(value)
+    if token.startswith("dynamic_"):
+        token = token[len("dynamic_") :]
+    return token
+
+
+def _normalize_dynamic_contract(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    routing_policy = str(
+        value.get("routing_policy")
+        or value.get("routing")
+        or value.get("route")
+        or ""
+    ).strip()
+    tools = _normalize_tools(value.get("tools"))
+    contract: dict[str, Any] = {}
+    if routing_policy:
+        contract["routing_policy"] = routing_policy
+    if tools:
+        contract["tools"] = tools
+    return contract
+
+
+def _normalize_dynamic_contract_map(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for key, item in value.items():
+        token = _normalize_dynamic_token(key)
+        if not token:
+            continue
+        contract = _normalize_dynamic_contract(item)
+        if contract:
+            normalized[token] = contract
+    return normalized
+
+
 def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
     getter = getattr(orchestrator, "get_run_logs", None)
     if getter is None or not callable(getter):
@@ -356,6 +443,20 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
         "specialist_loop_enabled_config": False,
         "specialist_max_jobs_config": 0,
         "specialist_min_confidence_config": 0.0,
+        "specialist_top_action": "",
+        "specialist_selected_roles": [],
+        "specialist_action_counts": {},
+        "specialist_role_action_counts": {},
+        "specialist_role_avg_match_score": {},
+        "specialist_contract_controller_enabled_config": False,
+        "specialist_contract_controller_applied_config": False,
+        "specialist_contract_controller_quality_pressure_config": 0.0,
+        "specialist_contract_lookback_runs_config": 0,
+        "specialist_contract_min_rounds_config": 0,
+        "specialist_contract_min_role_samples_config": 0,
+        "specialist_contract_round_count_config": 0,
+        "specialist_contract_roles_adjusted_config": [],
+        "specialist_contract_role_boost_adjustments_config": {},
         "spawn_selected_count": 0,
         "spawn_dynamic_count": 0,
         "spawn_selected_roles": [],
@@ -387,10 +488,63 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
     spawn_role_tools: dict[str, list[str]] = {}
     spawn_role_boosts: dict[str, float] = {}
     spawn_dynamic_token_boosts: dict[str, float] = {}
+    specialist_selected_roles: set[str] = set()
+    specialist_contract_roles_adjusted: set[str] = set()
+    specialist_action_counts: dict[str, int] = {"merge": 0, "escalate": 0, "drop": 0}
+    specialist_role_action_counts: dict[str, dict[str, int]] = {}
+    specialist_role_match_score_sums: dict[str, float] = {}
+    specialist_role_match_score_weights: dict[str, int] = {}
+    specialist_contract_role_boost_adjustments: dict[str, float] = {}
     for item in logs:
         stage = str(getattr(item, "stage", "")).strip().lower()
         meta = getattr(item, "meta", None)
         if not isinstance(meta, dict):
+            continue
+        if stage == "queue":
+            telemetry["specialist_contract_controller_enabled_config"] = (
+                telemetry["specialist_contract_controller_enabled_config"]
+                or bool(meta.get("specialist_contract_controller_enabled", False))
+            )
+            telemetry["specialist_contract_controller_applied_config"] = (
+                telemetry["specialist_contract_controller_applied_config"]
+                or bool(meta.get("specialist_contract_controller_applied", False))
+            )
+            telemetry["specialist_contract_controller_quality_pressure_config"] = max(
+                telemetry["specialist_contract_controller_quality_pressure_config"],
+                _to_float(meta.get("specialist_contract_controller_quality_pressure"), 0.0),
+            )
+            telemetry["specialist_contract_lookback_runs_config"] = max(
+                telemetry["specialist_contract_lookback_runs_config"],
+                _to_int(meta.get("specialist_contract_lookback_runs"), 0),
+            )
+            telemetry["specialist_contract_min_rounds_config"] = max(
+                telemetry["specialist_contract_min_rounds_config"],
+                _to_int(meta.get("specialist_contract_min_rounds"), 0),
+            )
+            telemetry["specialist_contract_min_role_samples_config"] = max(
+                telemetry["specialist_contract_min_role_samples_config"],
+                _to_int(meta.get("specialist_contract_min_role_samples"), 0),
+            )
+            telemetry["specialist_contract_round_count_config"] = max(
+                telemetry["specialist_contract_round_count_config"],
+                _to_int(meta.get("specialist_contract_round_count"), 0),
+            )
+            roles_adjusted = meta.get("specialist_contract_roles_adjusted")
+            if isinstance(roles_adjusted, list):
+                for role in roles_adjusted:
+                    normalized = _normalize_role(role)
+                    if normalized:
+                        specialist_contract_roles_adjusted.add(normalized)
+            role_boosts_raw = meta.get("specialist_contract_role_boost_adjustments")
+            role_boosts = _normalize_role_score_map(
+                role_boosts_raw,
+                lower=-4.0,
+                upper=4.0,
+            )
+            for role, value in role_boosts.items():
+                current = specialist_contract_role_boost_adjustments.get(role)
+                if current is None or abs(value) >= abs(current):
+                    specialist_contract_role_boost_adjustments[role] = value
             continue
         if stage == "challenge_reconciliation":
             telemetry["disagreement_count"] = max(
@@ -451,6 +605,39 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
                 telemetry["specialist_min_confidence_config"],
                 _to_float(meta.get("specialist_min_confidence"), 0.0),
             )
+            selected_roles = meta.get("specialist_selected_roles")
+            if isinstance(selected_roles, list):
+                for role in selected_roles:
+                    normalized = _normalize_role(role)
+                    if normalized:
+                        specialist_selected_roles.add(normalized)
+            action_counts = _normalize_action_counts(meta.get("specialist_action_counts"))
+            if action_counts:
+                specialist_action_counts["merge"] += action_counts.get("merge", 0)
+                specialist_action_counts["escalate"] += action_counts.get("escalate", 0)
+                specialist_action_counts["drop"] += action_counts.get("drop", 0)
+            role_action_counts = _normalize_role_action_counts(
+                meta.get("specialist_role_action_counts")
+            )
+            for role, counts in role_action_counts.items():
+                specialist_selected_roles.add(role)
+                bucket = specialist_role_action_counts.setdefault(
+                    role,
+                    {"merge": 0, "escalate": 0, "drop": 0, "total": 0},
+                )
+                bucket["merge"] += counts.get("merge", 0)
+                bucket["escalate"] += counts.get("escalate", 0)
+                bucket["drop"] += counts.get("drop", 0)
+                bucket["total"] += counts.get("total", 0)
+            role_avg_match = _normalize_role_score_map(meta.get("specialist_role_avg_match_score"))
+            for role, score in role_avg_match.items():
+                weight = role_action_counts.get(role, {}).get("total", 1)
+                specialist_role_match_score_sums[role] = (
+                    specialist_role_match_score_sums.get(role, 0.0) + (score * float(weight))
+                )
+                specialist_role_match_score_weights[role] = (
+                    specialist_role_match_score_weights.get(role, 0) + int(weight)
+                )
             continue
         if stage == "depth_allocator":
             telemetry["depth_cycles_observed"] = max(
@@ -572,6 +759,40 @@ def _extract_run_telemetry(orchestrator: Any, run_id: str) -> dict[str, Any]:
     telemetry["spawn_dynamic_token_boosts_config"] = {
         key: spawn_dynamic_token_boosts[key]
         for key in sorted(spawn_dynamic_token_boosts)
+    }
+    specialist_role_avg_match_score = {
+        role: round(
+            specialist_role_match_score_sums[role]
+            / float(specialist_role_match_score_weights[role]),
+            4,
+        )
+        for role in sorted(specialist_role_match_score_sums)
+        if specialist_role_match_score_weights.get(role, 0) > 0
+    }
+    specialist_action_total = (
+        specialist_action_counts["merge"]
+        + specialist_action_counts["escalate"]
+        + specialist_action_counts["drop"]
+    )
+    specialist_top_action = ""
+    if specialist_action_total > 0:
+        specialist_top_action = max(
+            specialist_action_counts.items(),
+            key=lambda item: item[1],
+        )[0]
+    telemetry["specialist_top_action"] = specialist_top_action
+    telemetry["specialist_selected_roles"] = sorted(specialist_selected_roles)
+    telemetry["specialist_action_counts"] = dict(specialist_action_counts)
+    telemetry["specialist_role_action_counts"] = {
+        key: specialist_role_action_counts[key] for key in sorted(specialist_role_action_counts)
+    }
+    telemetry["specialist_role_avg_match_score"] = specialist_role_avg_match_score
+    telemetry["specialist_contract_roles_adjusted_config"] = sorted(
+        specialist_contract_roles_adjusted
+    )
+    telemetry["specialist_contract_role_boost_adjustments_config"] = {
+        key: specialist_contract_role_boost_adjustments[key]
+        for key in sorted(specialist_contract_role_boost_adjustments)
     }
     if not any(value for value in telemetry.values()):
         return {}
@@ -1186,7 +1407,7 @@ def calibration_env_exports(calibration: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _specialist_report_signals(report: dict[str, Any]) -> dict[str, float]:
+def _specialist_report_signals(report: dict[str, Any]) -> dict[str, Any]:
     runs = report.get("runs")
     if not isinstance(runs, list):
         runs = []
@@ -1202,12 +1423,27 @@ def _specialist_report_signals(report: dict[str, Any]) -> dict[str, float]:
             "avg_diversity_flagged_count": 0.0,
             "avg_specialist_count": 0.0,
             "avg_spawn_dynamic_count": 0.0,
+            "avg_specialist_contract_quality_pressure": 0.0,
+            "avg_specialist_contract_round_count": 0.0,
+            "specialist_contract_controller_applied_rate": 0.0,
+            "role_stats": {},
         }
 
     disagreement_total = 0.0
     diversity_total = 0.0
     specialist_total = 0.0
     dynamic_total = 0.0
+    contract_quality_pressure_total = 0.0
+    contract_round_count_total = 0.0
+    contract_controller_applied_total = 0.0
+    role_counts: dict[str, int] = {}
+    role_merge_counts: dict[str, int] = {}
+    role_escalate_counts: dict[str, int] = {}
+    role_drop_counts: dict[str, int] = {}
+    role_match_totals: dict[str, float] = {}
+    role_match_counts: dict[str, int] = {}
+    role_quality_totals: dict[str, float] = {}
+    role_quality_counts: dict[str, int] = {}
     for item in completed:
         telemetry = item.get("telemetry")
         if not isinstance(telemetry, dict):
@@ -1216,14 +1452,109 @@ def _specialist_report_signals(report: dict[str, Any]) -> dict[str, float]:
         diversity_total += _to_float(telemetry.get("diversity_flagged_count"), 0.0)
         specialist_total += _to_float(telemetry.get("specialist_count"), 0.0)
         dynamic_total += _to_float(telemetry.get("spawn_dynamic_count"), 0.0)
+        contract_quality_pressure_total += _to_float(
+            telemetry.get("specialist_contract_controller_quality_pressure_config"),
+            0.0,
+        )
+        contract_round_count_total += _to_float(
+            telemetry.get("specialist_contract_round_count_config"),
+            0.0,
+        )
+        if bool(telemetry.get("specialist_contract_controller_applied_config", False)):
+            contract_controller_applied_total += 1.0
+        run_quality_payload = item.get("quality")
+        run_quality_score = (
+            _to_float(run_quality_payload.get("quality_score"), 0.0)
+            if isinstance(run_quality_payload, dict)
+            else 0.0
+        )
+        role_action_counts = _normalize_role_action_counts(
+            telemetry.get("specialist_role_action_counts")
+        )
+        role_avg_match = _normalize_role_score_map(
+            telemetry.get("specialist_role_avg_match_score")
+        )
+        selected_roles_raw = telemetry.get("specialist_selected_roles")
+        selected_roles = [
+            _normalize_role(role)
+            for role in list(selected_roles_raw or [])
+            if _normalize_role(role)
+        ]
+        fallback_top_action = str(telemetry.get("specialist_top_action") or "merge").strip().lower()
+        if fallback_top_action not in {"merge", "escalate", "drop"}:
+            fallback_top_action = "merge"
+        if not role_action_counts:
+            for role in selected_roles:
+                role_action_counts[role] = {
+                    "merge": 1 if fallback_top_action == "merge" else 0,
+                    "escalate": 1 if fallback_top_action == "escalate" else 0,
+                    "drop": 1 if fallback_top_action == "drop" else 0,
+                    "total": 1,
+                }
+        for role, counts in role_action_counts.items():
+            total = max(1, int(counts.get("total", 0)))
+            role_counts[role] = role_counts.get(role, 0) + total
+            role_merge_counts[role] = role_merge_counts.get(role, 0) + int(counts.get("merge", 0))
+            role_escalate_counts[role] = role_escalate_counts.get(role, 0) + int(
+                counts.get("escalate", 0)
+            )
+            role_drop_counts[role] = role_drop_counts.get(role, 0) + int(counts.get("drop", 0))
+            role_quality_totals[role] = role_quality_totals.get(role, 0.0) + (
+                run_quality_score * float(total)
+            )
+            role_quality_counts[role] = role_quality_counts.get(role, 0) + total
+            if role in role_avg_match:
+                role_match_totals[role] = role_match_totals.get(role, 0.0) + (
+                    role_avg_match[role] * float(total)
+                )
+                role_match_counts[role] = role_match_counts.get(role, 0) + total
+            elif role in selected_roles:
+                role_match_totals[role] = role_match_totals.get(role, 0.0)
+                role_match_counts[role] = role_match_counts.get(role, 0)
 
     count = float(len(completed))
+    role_stats: dict[str, dict[str, float | int]] = {}
+    for role, selected_count in sorted(role_counts.items()):
+        if selected_count <= 0:
+            continue
+        merge_count = role_merge_counts.get(role, 0)
+        escalate_count = role_escalate_counts.get(role, 0)
+        drop_count = role_drop_counts.get(role, 0)
+        avg_match_score = (
+            role_match_totals.get(role, 0.0) / float(role_match_counts.get(role, 0))
+            if role_match_counts.get(role, 0) > 0
+            else 0.0
+        )
+        avg_run_quality = (
+            role_quality_totals.get(role, 0.0) / float(role_quality_counts.get(role, 0))
+            if role_quality_counts.get(role, 0) > 0
+            else 0.0
+        )
+        role_stats[role] = {
+            "selected_count": selected_count,
+            "merge_count": merge_count,
+            "escalate_count": escalate_count,
+            "drop_count": drop_count,
+            "merge_rate": round(float(merge_count) / float(selected_count), 4),
+            "escalate_rate": round(float(escalate_count) / float(selected_count), 4),
+            "drop_rate": round(float(drop_count) / float(selected_count), 4),
+            "avg_match_score": round(avg_match_score, 4),
+            "avg_run_quality": round(avg_run_quality, 4),
+        }
+
     return {
         "completed_runs": count,
         "avg_disagreement_count": round(disagreement_total / count, 4),
         "avg_diversity_flagged_count": round(diversity_total / count, 4),
         "avg_specialist_count": round(specialist_total / count, 4),
         "avg_spawn_dynamic_count": round(dynamic_total / count, 4),
+        "avg_specialist_contract_quality_pressure": round(contract_quality_pressure_total / count, 4),
+        "avg_specialist_contract_round_count": round(contract_round_count_total / count, 4),
+        "specialist_contract_controller_applied_rate": round(
+            contract_controller_applied_total / count,
+            4,
+        ),
+        "role_stats": role_stats,
     }
 
 
@@ -1261,6 +1592,15 @@ def calibrate_specialist_arbitration_policy(
         0.0,
         1.0,
     )
+    role_stats_raw = telemetry.get("role_stats")
+    role_stats = role_stats_raw if isinstance(role_stats_raw, dict) else {}
+    completed_runs = max(1.0, _to_float(telemetry.get("completed_runs"), 1.0))
+    observed_contract_rounds = _to_float(
+        telemetry.get("avg_specialist_contract_round_count"),
+        0.0,
+    ) * completed_runs
+    fallback_rounds = _to_float(telemetry.get("avg_specialist_count"), 0.0) * completed_runs
+    estimated_contract_rounds = max(observed_contract_rounds, fallback_rounds)
     review_pressure = (
         (0.7 * quality_pressure)
         + (0.6 * disagreement_pressure)
@@ -1310,6 +1650,54 @@ def calibrate_specialist_arbitration_policy(
     if enable_loop == 0:
         max_jobs = 0
 
+    controller_enable = 1
+    if (
+        quality_pressure <= 0.0
+        and max(runtime_pressure, 0.0) > 0.35
+        and disagreement_pressure < 0.2
+        and diversity_pressure < 0.15
+        and not role_stats
+    ):
+        controller_enable = 0
+    if review_pressure < -0.5 and not role_stats:
+        controller_enable = 0
+    if role_stats:
+        controller_enable = 1
+
+    lookback_runs = _clamp_int(
+        int(
+            round(
+                max(8.0, min(180.0, float(dataset_size) * 2.0))
+                + (12.0 * max(disagreement_pressure, diversity_pressure))
+            )
+        ),
+        1,
+        500,
+    )
+    min_rounds = _clamp_int(
+        int(
+            round(
+                max(
+                    2.0,
+                    min(
+                        32.0,
+                        (0.45 * max(estimated_contract_rounds, 1.0))
+                        + (3.0 * max(review_pressure, 0.0)),
+                    ),
+                )
+            )
+        ),
+        1,
+        200,
+    )
+    role_count = len(role_stats)
+    min_role_samples = 2
+    if role_count >= 4:
+        min_role_samples = 3
+    if role_count >= 10:
+        min_role_samples = 4
+    min_role_samples = _clamp_int(min_role_samples, 1, 50)
+
     rationale: list[str] = []
     if quality_pressure > 0.15:
         rationale.append("Average quality is below target; specialist arbitration is expanded.")
@@ -1324,11 +1712,19 @@ def calibrate_specialist_arbitration_policy(
             rationale.append("Average runtime is within target runtime budget.")
     if failure_rate > 0.2:
         rationale.append("Failure rate is elevated; policy avoids aggressive arbitration expansion.")
+    if controller_enable == 1:
+        rationale.append("Specialist contract controller remains enabled to adapt role boosts from arbitration telemetry.")
+    if role_stats:
+        rationale.append("Observed specialist role outcomes provide enough signal for contract-controller sampling thresholds.")
 
     recommended_env = {
         "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": enable_loop,
         "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": max_jobs,
         "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": min_confidence,
+        "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER": controller_enable,
+        "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS": lookback_runs,
+        "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS": min_rounds,
+        "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES": min_role_samples,
     }
     return {
         "inputs": {
@@ -1373,6 +1769,10 @@ def train_specialist_arbitration_policy(
             "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": 1,
             "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": 2,
             "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": 0.78,
+            "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER": 1,
+            "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS": 24,
+            "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS": 4,
+            "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES": 2,
         }
         return {
             "report_count": 0,
@@ -1383,12 +1783,17 @@ def train_specialist_arbitration_policy(
     weighted_enable = 0.0
     weighted_jobs = 0.0
     weighted_min_conf = 0.0
+    weighted_controller_enable = 0.0
+    weighted_controller_lookback = 0.0
+    weighted_controller_min_rounds = 0.0
+    weighted_controller_min_role_samples = 0.0
     total_weight = 0.0
     quality_sum = 0.0
     runtime_sum = 0.0
     failure_sum = 0.0
     disagreement_sum = 0.0
     diversity_sum = 0.0
+    controller_pressure_sum = 0.0
     samples: list[dict[str, Any]] = []
 
     for report in valid_reports:
@@ -1411,6 +1816,12 @@ def train_specialist_arbitration_policy(
             telemetry.get("avg_diversity_flagged_count") if isinstance(telemetry, dict) else 0.0,
             0.0,
         )
+        avg_controller_pressure = _to_float(
+            telemetry.get("avg_specialist_contract_quality_pressure")
+            if isinstance(telemetry, dict)
+            else 0.0,
+            0.0,
+        )
         weight = max(0.1, report_quality + 0.2 - (0.25 * report_failure) + (0.05 * avg_disagreement))
         total_weight += weight
         quality_sum += report_quality
@@ -1418,10 +1829,23 @@ def train_specialist_arbitration_policy(
         failure_sum += report_failure
         disagreement_sum += avg_disagreement
         diversity_sum += avg_diversity
+        controller_pressure_sum += avg_controller_pressure
 
         weighted_enable += float(env["RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP"]) * weight
         weighted_jobs += float(env["RIM_SPECIALIST_ARBITRATION_MAX_JOBS"]) * weight
         weighted_min_conf += float(env["RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"]) * weight
+        weighted_controller_enable += float(
+            env.get("RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER", 1)
+        ) * weight
+        weighted_controller_lookback += float(
+            env.get("RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS", 24)
+        ) * weight
+        weighted_controller_min_rounds += float(
+            env.get("RIM_SPECIALIST_CONTRACT_MIN_ROUNDS", 4)
+        ) * weight
+        weighted_controller_min_role_samples += float(
+            env.get("RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES", 2)
+        ) * weight
         samples.append(
             {
                 "created_at": report.get("created_at"),
@@ -1441,6 +1865,7 @@ def train_specialist_arbitration_policy(
     )
     if enable_loop == 0:
         max_jobs = 0
+    controller_enable = 1 if (weighted_controller_enable / total_weight) >= 0.5 else 0
     policy_env = {
         "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": enable_loop,
         "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": max_jobs,
@@ -1448,12 +1873,29 @@ def train_specialist_arbitration_policy(
             _clamp_float(weighted_min_conf / total_weight, 0.6, 0.95),
             3,
         ),
+        "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER": controller_enable,
+        "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS": _clamp_int(
+            int(round(weighted_controller_lookback / total_weight)),
+            1,
+            500,
+        ),
+        "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS": _clamp_int(
+            int(round(weighted_controller_min_rounds / total_weight)),
+            1,
+            200,
+        ),
+        "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES": _clamp_int(
+            int(round(weighted_controller_min_role_samples / total_weight)),
+            1,
+            50,
+        ),
     }
     avg_quality = quality_sum / len(valid_reports)
     avg_runtime = runtime_sum / len(valid_reports)
     avg_failure = failure_sum / len(valid_reports)
     avg_disagreement = disagreement_sum / len(valid_reports)
     avg_diversity = diversity_sum / len(valid_reports)
+    avg_controller_pressure = controller_pressure_sum / len(valid_reports)
     rationale = [
         "Policy aggregates specialist-calibration recommendations using weighted averaging.",
     ]
@@ -1467,6 +1909,10 @@ def train_specialist_arbitration_policy(
         rationale.append("Failure rate is elevated; policy avoids aggressive escalation.")
     if avg_disagreement > 0.5 or avg_diversity > 0.4:
         rationale.append("Disagreement/diversity pressure supports stronger specialist coverage.")
+    if controller_enable == 1:
+        rationale.append("Specialist contract controller is enabled to keep role-boost adaptation active.")
+    if avg_controller_pressure > 0.1:
+        rationale.append("Observed specialist contract quality pressure justifies stronger controller sampling.")
 
     return {
         "report_count": len(valid_reports),
@@ -1478,6 +1924,7 @@ def train_specialist_arbitration_policy(
             "average_failure_rate": round(avg_failure, 4),
             "average_disagreement_count": round(avg_disagreement, 4),
             "average_diversity_flagged_count": round(avg_diversity, 4),
+            "average_specialist_contract_quality_pressure": round(avg_controller_pressure, 4),
             "target_quality": target_quality,
             "target_runtime_sec": target_runtime_sec,
         },
@@ -1861,7 +2308,7 @@ def train_arbitration_policy(
     }
 
 
-def _spawn_report_signals(report: dict[str, Any]) -> dict[str, float]:
+def _spawn_report_signals(report: dict[str, Any]) -> dict[str, Any]:
     runs = report.get("runs")
     if not isinstance(runs, list):
         runs = []
@@ -1876,11 +2323,26 @@ def _spawn_report_signals(report: dict[str, Any]) -> dict[str, float]:
             "avg_disagreement_count": 0.0,
             "avg_spawn_selected_count": 0.0,
             "avg_spawn_dynamic_count": 0.0,
+            "role_stats": {},
+            "dynamic_token_contract_stats": {},
         }
 
     disagreement_total = 0.0
     selected_total = 0.0
     dynamic_total = 0.0
+    role_counts: dict[str, int] = {}
+    role_merge_counts: dict[str, int] = {}
+    role_escalate_counts: dict[str, int] = {}
+    role_drop_counts: dict[str, int] = {}
+    role_match_totals: dict[str, float] = {}
+    role_match_counts: dict[str, int] = {}
+    role_quality_totals: dict[str, float] = {}
+    role_quality_counts: dict[str, int] = {}
+    dynamic_token_counts: dict[str, int] = {}
+    dynamic_token_quality_totals: dict[str, float] = {}
+    dynamic_token_quality_counts: dict[str, int] = {}
+    dynamic_token_contract_votes: dict[str, dict[str, float]] = {}
+    dynamic_token_contract_payloads: dict[str, dict[str, dict[str, Any]]] = {}
     for item in completed:
         telemetry = item.get("telemetry")
         if not isinstance(telemetry, dict):
@@ -1888,13 +2350,152 @@ def _spawn_report_signals(report: dict[str, Any]) -> dict[str, float]:
         disagreement_total += _to_float(telemetry.get("disagreement_count"), 0.0)
         selected_total += _to_float(telemetry.get("spawn_selected_count"), 0.0)
         dynamic_total += _to_float(telemetry.get("spawn_dynamic_count"), 0.0)
+        run_quality_payload = item.get("quality")
+        run_quality_score = (
+            _to_float(run_quality_payload.get("quality_score"), 0.0)
+            if isinstance(run_quality_payload, dict)
+            else 0.0
+        )
+        spawn_selected_roles_raw = telemetry.get("spawn_selected_roles")
+        spawn_selected_roles = [
+            _normalize_role(role)
+            for role in list(spawn_selected_roles_raw or [])
+            if _normalize_role(role)
+        ]
+        spawn_role_routing = _normalize_string_map(telemetry.get("spawn_role_routing"))
+        spawn_role_tools = _normalize_tool_map(telemetry.get("spawn_role_tools"))
+        for role in spawn_selected_roles:
+            if not role.startswith("dynamic_"):
+                continue
+            token = _normalize_dynamic_token(role)
+            if not token:
+                continue
+            dynamic_token_counts[token] = dynamic_token_counts.get(token, 0) + 1
+            dynamic_token_quality_totals[token] = dynamic_token_quality_totals.get(token, 0.0) + (
+                run_quality_score
+            )
+            dynamic_token_quality_counts[token] = dynamic_token_quality_counts.get(token, 0) + 1
+            dynamic_contract = _normalize_dynamic_contract(
+                {
+                    "routing_policy": spawn_role_routing.get(role)
+                    or spawn_role_routing.get(token),
+                    "tools": spawn_role_tools.get(role)
+                    or spawn_role_tools.get(token),
+                }
+            )
+            if not dynamic_contract:
+                continue
+            signature = (
+                f"{dynamic_contract.get('routing_policy', '')}|||"
+                f"{'||'.join(dynamic_contract.get('tools', []))}"
+            )
+            vote_weight = max(0.1, run_quality_score)
+            votes = dynamic_token_contract_votes.setdefault(token, {})
+            votes[signature] = votes.get(signature, 0.0) + vote_weight
+            payloads = dynamic_token_contract_payloads.setdefault(token, {})
+            payloads[signature] = dynamic_contract
+        role_action_counts = _normalize_role_action_counts(
+            telemetry.get("specialist_role_action_counts")
+        )
+        role_avg_match = _normalize_role_score_map(
+            telemetry.get("specialist_role_avg_match_score")
+        )
+        selected_roles_raw = telemetry.get("specialist_selected_roles")
+        selected_roles = [
+            _normalize_role(role)
+            for role in list(selected_roles_raw or [])
+            if _normalize_role(role)
+        ]
+        fallback_top_action = str(telemetry.get("specialist_top_action") or "merge").strip().lower()
+        if fallback_top_action not in {"merge", "escalate", "drop"}:
+            fallback_top_action = "merge"
+        if not role_action_counts:
+            for role in selected_roles:
+                role_action_counts[role] = {
+                    "merge": 1 if fallback_top_action == "merge" else 0,
+                    "escalate": 1 if fallback_top_action == "escalate" else 0,
+                    "drop": 1 if fallback_top_action == "drop" else 0,
+                    "total": 1,
+                }
+        for role, counts in role_action_counts.items():
+            total = max(1, int(counts.get("total", 0)))
+            role_counts[role] = role_counts.get(role, 0) + total
+            role_merge_counts[role] = role_merge_counts.get(role, 0) + int(counts.get("merge", 0))
+            role_escalate_counts[role] = role_escalate_counts.get(role, 0) + int(
+                counts.get("escalate", 0)
+            )
+            role_drop_counts[role] = role_drop_counts.get(role, 0) + int(counts.get("drop", 0))
+            role_quality_totals[role] = role_quality_totals.get(role, 0.0) + (
+                run_quality_score * float(total)
+            )
+            role_quality_counts[role] = role_quality_counts.get(role, 0) + total
+            if role in role_avg_match:
+                role_match_totals[role] = role_match_totals.get(role, 0.0) + (
+                    role_avg_match[role] * float(total)
+                )
+                role_match_counts[role] = role_match_counts.get(role, 0) + total
 
     count = float(len(completed))
+    role_stats: dict[str, dict[str, float | int]] = {}
+    for role, selected_count in sorted(role_counts.items()):
+        if selected_count <= 0:
+            continue
+        merge_count = role_merge_counts.get(role, 0)
+        escalate_count = role_escalate_counts.get(role, 0)
+        drop_count = role_drop_counts.get(role, 0)
+        avg_match_score = (
+            role_match_totals.get(role, 0.0) / float(role_match_counts.get(role, 0))
+            if role_match_counts.get(role, 0) > 0
+            else 0.0
+        )
+        avg_run_quality = (
+            role_quality_totals.get(role, 0.0) / float(role_quality_counts.get(role, 0))
+            if role_quality_counts.get(role, 0) > 0
+            else 0.0
+        )
+        role_stats[role] = {
+            "selected_count": selected_count,
+            "merge_count": merge_count,
+            "escalate_count": escalate_count,
+            "drop_count": drop_count,
+            "merge_rate": round(float(merge_count) / float(selected_count), 4),
+            "escalate_rate": round(float(escalate_count) / float(selected_count), 4),
+            "drop_rate": round(float(drop_count) / float(selected_count), 4),
+            "avg_match_score": round(avg_match_score, 4),
+            "avg_run_quality": round(avg_run_quality, 4),
+        }
+    dynamic_token_contract_stats: dict[str, dict[str, Any]] = {}
+    for token, selected_count in sorted(dynamic_token_counts.items()):
+        if selected_count <= 0:
+            continue
+        avg_run_quality = (
+            dynamic_token_quality_totals.get(token, 0.0)
+            / float(dynamic_token_quality_counts.get(token, 0))
+            if dynamic_token_quality_counts.get(token, 0) > 0
+            else 0.0
+        )
+        entry: dict[str, Any] = {
+            "selected_count": selected_count,
+            "avg_run_quality": round(avg_run_quality, 4),
+        }
+        votes = dynamic_token_contract_votes.get(token, {})
+        if votes:
+            signature, _ = max(votes.items(), key=lambda item: item[1])
+            contract_payloads = dynamic_token_contract_payloads.get(token, {})
+            best_contract = contract_payloads.get(signature)
+            if best_contract:
+                if "routing_policy" in best_contract:
+                    entry["routing_policy"] = best_contract["routing_policy"]
+                if "tools" in best_contract:
+                    entry["tools"] = list(best_contract["tools"])
+        dynamic_token_contract_stats[token] = entry
     return {
         "completed_runs": count,
         "avg_disagreement_count": round(disagreement_total / count, 4),
         "avg_spawn_selected_count": round(selected_total / count, 4),
         "avg_spawn_dynamic_count": round(dynamic_total / count, 4),
+        "role_stats": role_stats,
+        "dynamic_token_contract_stats": dynamic_token_contract_stats,
     }
 
 
@@ -1976,6 +2577,48 @@ def calibrate_spawn_policy(
     )
     if enable_dynamic == 0:
         max_dynamic = 0
+    role_stats_raw = telemetry.get("role_stats")
+    role_stats = role_stats_raw if isinstance(role_stats_raw, dict) else {}
+    role_boosts: dict[str, float] = {}
+    dynamic_contracts: dict[str, dict[str, Any]] = {}
+    for role, stats in role_stats.items():
+        if not isinstance(stats, dict):
+            continue
+        selected_count = max(0, _to_int(stats.get("selected_count"), 0))
+        if selected_count < 2:
+            continue
+        merge_rate = _clamp_float(_to_float(stats.get("merge_rate"), 0.0), 0.0, 1.0)
+        escalate_rate = _clamp_float(_to_float(stats.get("escalate_rate"), 0.0), 0.0, 1.0)
+        drop_rate = _clamp_float(_to_float(stats.get("drop_rate"), 0.0), 0.0, 1.0)
+        avg_match_score = _clamp_float(_to_float(stats.get("avg_match_score"), 0.0), 0.0, 8.0)
+        avg_run_quality = _clamp_float(_to_float(stats.get("avg_run_quality"), 0.0), 0.0, 1.0)
+        role_signal = (
+            (merge_rate - escalate_rate - (0.6 * drop_rate))
+            + (0.2 * (avg_match_score - 1.0))
+            + (0.6 * (avg_run_quality - float(target_quality)))
+        )
+        delta = _clamp_float(role_signal, -1.6, 1.6)
+        if abs(delta) < 0.08:
+            continue
+        role_boosts[str(role)] = round(delta, 4)
+    dynamic_stats_raw = telemetry.get("dynamic_token_contract_stats")
+    dynamic_stats = dynamic_stats_raw if isinstance(dynamic_stats_raw, dict) else {}
+    for token_raw, stats in dynamic_stats.items():
+        if not isinstance(stats, dict):
+            continue
+        token = _normalize_dynamic_token(token_raw)
+        if not token:
+            continue
+        selected_count = max(0, _to_int(stats.get("selected_count"), 0))
+        if selected_count < 1:
+            continue
+        avg_run_quality = _clamp_float(_to_float(stats.get("avg_run_quality"), 0.0), 0.0, 1.0)
+        if avg_run_quality < max(0.0, float(target_quality) - 0.12):
+            continue
+        contract = _normalize_dynamic_contract(stats)
+        if not contract:
+            continue
+        dynamic_contracts[token] = contract
 
     rationale: list[str] = []
     if quality_pressure > 0.15:
@@ -1991,6 +2634,10 @@ def calibrate_spawn_policy(
             rationale.append("Average runtime is within target runtime budget.")
     if failure_rate > 0.2:
         rationale.append("Failure rate is elevated; policy avoids aggressive specialist expansion.")
+    if role_boosts:
+        rationale.append("Specialist arbitration outcomes provide role-level signals for spawn role boosts.")
+    if dynamic_contracts:
+        rationale.append("Dynamic specialist routing/tools were learned from successful token-level runs.")
 
     recommended_env = {
         "RIM_SPAWN_MIN_ROLE_SCORE": min_role_score,
@@ -1999,6 +2646,10 @@ def calibrate_spawn_policy(
         "RIM_ENABLE_DYNAMIC_SPECIALISTS": enable_dynamic,
         "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": max_dynamic,
     }
+    if role_boosts:
+        recommended_env["RIM_SPAWN_ROLE_BOOSTS"] = role_boosts
+    if dynamic_contracts:
+        recommended_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = dynamic_contracts
     return {
         "inputs": {
             "average_quality_score": avg_quality,
@@ -2057,6 +2708,10 @@ def train_spawn_policy(
         "RIM_ENABLE_DYNAMIC_SPECIALISTS": 0.0,
         "RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS": 0.0,
     }
+    role_boost_weighted: dict[str, float] = {}
+    role_boost_total_weight: dict[str, float] = {}
+    dynamic_contract_votes: dict[str, dict[str, float]] = {}
+    dynamic_contract_payloads: dict[str, dict[str, dict[str, Any]]] = {}
     total_weight = 0.0
     quality_sum = 0.0
     runtime_sum = 0.0
@@ -2094,6 +2749,36 @@ def train_spawn_policy(
         dynamic_sum += avg_dynamic
         for key in weighted:
             weighted[key] += float(env[key]) * weight
+        role_boosts = _normalize_role_score_map(
+            env.get("RIM_SPAWN_ROLE_BOOSTS"),
+            lower=-4.0,
+            upper=4.0,
+        )
+        for role, boost in role_boosts.items():
+            role_boost_weighted[role] = role_boost_weighted.get(role, 0.0) + (boost * weight)
+            role_boost_total_weight[role] = role_boost_total_weight.get(role, 0.0) + weight
+        dynamic_contracts = _normalize_dynamic_contract_map(
+            env.get("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS")
+        )
+        for token, contract in dynamic_contracts.items():
+            routing_policy = str(contract.get("routing_policy") or "").strip()
+            tools = _normalize_tools(contract.get("tools"))
+            normalized_contract = _normalize_dynamic_contract(
+                {
+                    "routing_policy": routing_policy,
+                    "tools": tools,
+                }
+            )
+            if not normalized_contract:
+                continue
+            signature = (
+                f"{normalized_contract.get('routing_policy', '')}|||"
+                f"{'||'.join(normalized_contract.get('tools', []))}"
+            )
+            votes = dynamic_contract_votes.setdefault(token, {})
+            votes[signature] = votes.get(signature, 0.0) + weight
+            payloads = dynamic_contract_payloads.setdefault(token, {})
+            payloads[signature] = normalized_contract
         samples.append(
             {
                 "created_at": report.get("created_at"),
@@ -2131,6 +2816,29 @@ def train_spawn_policy(
     }
     if policy_env["RIM_ENABLE_DYNAMIC_SPECIALISTS"] == 0:
         policy_env["RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS"] = 0
+    role_boosts_final: dict[str, float] = {}
+    for role in sorted(role_boost_weighted):
+        denominator = role_boost_total_weight.get(role, 0.0)
+        if denominator <= 0.0:
+            continue
+        blended = role_boost_weighted[role] / denominator
+        if abs(blended) < 0.05:
+            continue
+        role_boosts_final[role] = round(_clamp_float(blended, -4.0, 4.0), 4)
+    dynamic_contracts_final: dict[str, dict[str, Any]] = {}
+    for token in sorted(dynamic_contract_votes):
+        votes = dynamic_contract_votes.get(token, {})
+        if not votes:
+            continue
+        signature, _ = max(votes.items(), key=lambda item: item[1])
+        payloads = dynamic_contract_payloads.get(token, {})
+        contract = payloads.get(signature)
+        if contract:
+            dynamic_contracts_final[token] = contract
+    if role_boosts_final:
+        policy_env["RIM_SPAWN_ROLE_BOOSTS"] = role_boosts_final
+    if dynamic_contracts_final:
+        policy_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = dynamic_contracts_final
     avg_quality = quality_sum / len(valid_reports)
     avg_runtime = runtime_sum / len(valid_reports)
     avg_failure = failure_sum / len(valid_reports)
@@ -2149,6 +2857,10 @@ def train_spawn_policy(
         rationale.append("Failure rate is elevated; specialist expansion remains conservative.")
     if avg_disagreement > 0.5 or avg_dynamic > 0.5:
         rationale.append("Disagreement/dynamic-role pressure supports more adaptive specialist spawning.")
+    if role_boosts_final:
+        rationale.append("Specialist arbitration role outcomes contributed weighted spawn role-boost updates.")
+    if dynamic_contracts_final:
+        rationale.append("Dynamic token routing/tool contracts were preserved from weighted run outcomes.")
 
     return {
         "report_count": len(valid_reports),
@@ -2686,7 +3398,43 @@ def _blend_specialist_policy_env(
     max_jobs += alpha * _to_float(fresh_env.get("RIM_SPECIALIST_ARBITRATION_MAX_JOBS"), 2.0)
     min_conf = (1.0 - alpha) * _to_float(prior.get("RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"), 0.78)
     min_conf += alpha * _to_float(fresh_env.get("RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"), 0.78)
+    controller_enable_prior = _to_float(
+        prior.get("RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER"),
+        1.0,
+    )
+    controller_enable_fresh = _to_float(
+        fresh_env.get("RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER"),
+        1.0,
+    )
+    controller_enable_score = ((1.0 - alpha) * controller_enable_prior) + (
+        alpha * controller_enable_fresh
+    )
+    lookback = (1.0 - alpha) * _to_float(
+        prior.get("RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS"),
+        24.0,
+    )
+    lookback += alpha * _to_float(
+        fresh_env.get("RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS"),
+        24.0,
+    )
+    min_rounds = (1.0 - alpha) * _to_float(
+        prior.get("RIM_SPECIALIST_CONTRACT_MIN_ROUNDS"),
+        4.0,
+    )
+    min_rounds += alpha * _to_float(
+        fresh_env.get("RIM_SPECIALIST_CONTRACT_MIN_ROUNDS"),
+        4.0,
+    )
+    min_role_samples = (1.0 - alpha) * _to_float(
+        prior.get("RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES"),
+        2.0,
+    )
+    min_role_samples += alpha * _to_float(
+        fresh_env.get("RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES"),
+        2.0,
+    )
     enable_loop = 1 if enable_score >= 0.5 else 0
+    enable_controller = 1 if controller_enable_score >= 0.5 else 0
     normalized_jobs = _clamp_int(int(round(max_jobs)), 0, 6)
     if enable_loop == 0:
         normalized_jobs = 0
@@ -2696,6 +3444,14 @@ def _blend_specialist_policy_env(
         "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": round(
             _clamp_float(min_conf, 0.6, 0.95),
             3,
+        ),
+        "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER": enable_controller,
+        "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS": _clamp_int(int(round(lookback)), 1, 500),
+        "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS": _clamp_int(int(round(min_rounds)), 1, 200),
+        "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES": _clamp_int(
+            int(round(min_role_samples)),
+            1,
+            50,
         ),
     }
 
@@ -2894,6 +3650,12 @@ def _blend_spawn_policy_env(
     routing_fresh = _normalize_string_map(fresh_env.get("RIM_SPAWN_ROLE_ROUTING_OVERRIDES"))
     tool_prior = _normalize_tool_map(prior.get("RIM_SPAWN_ROLE_TOOL_OVERRIDES"))
     tool_fresh = _normalize_tool_map(fresh_env.get("RIM_SPAWN_ROLE_TOOL_OVERRIDES"))
+    dynamic_contracts_prior = _normalize_dynamic_contract_map(
+        prior.get("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS")
+    )
+    dynamic_contracts_fresh = _normalize_dynamic_contract_map(
+        fresh_env.get("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS")
+    )
 
     blended_env: dict[str, Any] = {
         "RIM_SPAWN_MIN_ROLE_SCORE": round(_clamp_float(min_role_score, 0.4, 3.0), 3),
@@ -2926,6 +3688,9 @@ def _blend_spawn_policy_env(
     combined_tools = {**tool_prior, **tool_fresh}
     if combined_tools:
         blended_env["RIM_SPAWN_ROLE_TOOL_OVERRIDES"] = combined_tools
+    combined_dynamic_contracts = {**dynamic_contracts_prior, **dynamic_contracts_fresh}
+    if combined_dynamic_contracts:
+        blended_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = combined_dynamic_contracts
     return blended_env
 
 
@@ -3677,6 +4442,12 @@ def _rl_spawn_experiences(
             ]
             role_routing = _normalize_string_map(telemetry_dict.get("spawn_role_routing"))
             role_tools = _normalize_tool_map(telemetry_dict.get("spawn_role_tools"))
+            specialist_role_action_counts = _normalize_role_action_counts(
+                telemetry_dict.get("specialist_role_action_counts")
+            )
+            specialist_role_avg_match_score = _normalize_role_score_map(
+                telemetry_dict.get("specialist_role_avg_match_score")
+            )
 
             reward = quality_score - (runtime_weight_normalized * runtime_pressure)
             if status in {"failed", "canceled"}:
@@ -3698,6 +4469,8 @@ def _rl_spawn_experiences(
                     "dynamic_roles": dynamic_roles,
                     "role_routing": role_routing,
                     "role_tools": role_tools,
+                    "specialist_role_action_counts": specialist_role_action_counts,
+                    "specialist_role_avg_match_score": specialist_role_avg_match_score,
                     "actions": {
                         "selected_count": selected_count,
                         "dynamic_count": dynamic_count,
@@ -3750,6 +4523,9 @@ def train_rl_spawn_policy(
     dynamic_token_boosts = _normalize_float_map(prior.get("RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS"))
     routing_overrides = _normalize_string_map(prior.get("RIM_SPAWN_ROLE_ROUTING_OVERRIDES"))
     tool_overrides = _normalize_tool_map(prior.get("RIM_SPAWN_ROLE_TOOL_OVERRIDES"))
+    dynamic_role_contracts = _normalize_dynamic_contract_map(
+        prior.get("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS")
+    )
 
     if not experiences:
         spawn_env = _blend_spawn_policy_env(
@@ -3778,6 +4554,7 @@ def train_rl_spawn_policy(
                 "spawn": {"positive": 0.0, "negative": 0.0, "top_runs": []},
                 "role_boosts": [],
                 "dynamic_token_boosts": [],
+                "dynamic_role_contracts": [],
             },
             "recommended_exports": payload["recommended_exports"],
         }
@@ -3787,8 +4564,11 @@ def train_rl_spawn_policy(
     spawn_credits: list[dict[str, Any]] = []
     role_credit_totals: dict[str, float] = {}
     dynamic_token_credit_totals: dict[str, float] = {}
+    dynamic_contract_credit_totals: dict[str, float] = {}
     routing_votes: dict[str, dict[str, float]] = {}
     tool_votes: dict[str, dict[str, float]] = {}
+    dynamic_contract_votes: dict[str, dict[str, float]] = {}
+    dynamic_contract_payloads: dict[str, dict[str, dict[str, Any]]] = {}
 
     for _epoch in range(epoch_count):
         for exp in experiences:
@@ -3851,6 +4631,12 @@ def train_rl_spawn_policy(
             role_credit_each = role_credit_base / max(1.0, float(len(selected_roles)))
             role_routing = _normalize_string_map(exp.get("role_routing"))
             role_tools = _normalize_tool_map(exp.get("role_tools"))
+            specialist_role_action_counts = _normalize_role_action_counts(
+                exp.get("specialist_role_action_counts")
+            )
+            specialist_role_avg_match_score = _normalize_role_score_map(
+                exp.get("specialist_role_avg_match_score")
+            )
             for role in selected_roles:
                 normalized_role = _normalize_role(role)
                 if not normalized_role:
@@ -3871,6 +4657,30 @@ def train_rl_spawn_policy(
                             dynamic_token_credit_totals.get(token),
                             0.0,
                         ) + role_credit_each
+                        dynamic_contract = _normalize_dynamic_contract(
+                            {
+                                "routing_policy": role_routing.get(normalized_role)
+                                or role_routing.get(token),
+                                "tools": role_tools.get(normalized_role)
+                                or role_tools.get(token),
+                            }
+                        )
+                        if dynamic_contract and role_credit_each > 0.0:
+                            signature = (
+                                f"{dynamic_contract.get('routing_policy', '')}|||"
+                                f"{'||'.join(dynamic_contract.get('tools', []))}"
+                            )
+                            token_votes = dynamic_contract_votes.setdefault(token, {})
+                            token_votes[signature] = _to_float(
+                                token_votes.get(signature),
+                                0.0,
+                            ) + role_credit_each
+                            token_payloads = dynamic_contract_payloads.setdefault(token, {})
+                            token_payloads[signature] = dynamic_contract
+                            dynamic_contract_credit_totals[token] = _to_float(
+                                dynamic_contract_credit_totals.get(token),
+                                0.0,
+                            ) + role_credit_each
                     continue
                 role_boosts[normalized_role] = round(
                     _clamp_float(
@@ -3897,6 +4707,111 @@ def train_rl_spawn_policy(
                         role_tool_votes.get(signature),
                         0.0,
                     ) + role_credit_each
+            for role, counts in specialist_role_action_counts.items():
+                total = max(1, int(counts.get("total", 0)))
+                merge_rate = _clamp_float(
+                    float(counts.get("merge", 0)) / float(total),
+                    0.0,
+                    1.0,
+                )
+                escalate_rate = _clamp_float(
+                    float(counts.get("escalate", 0)) / float(total),
+                    0.0,
+                    1.0,
+                )
+                drop_rate = _clamp_float(
+                    float(counts.get("drop", 0)) / float(total),
+                    0.0,
+                    1.0,
+                )
+                avg_match_score = _clamp_float(
+                    _to_float(specialist_role_avg_match_score.get(role), 0.0),
+                    0.0,
+                    8.0,
+                )
+                role_signal = (
+                    (merge_rate - escalate_rate - (0.5 * drop_rate))
+                    + (0.18 * (avg_match_score - 1.0))
+                )
+                role_signal = _clamp_float(role_signal, -2.0, 2.0)
+                if abs(role_signal) < 0.05:
+                    continue
+                role_intensity = _clamp_float(0.6 + (0.2 * float(total)), 0.6, 2.0)
+                role_outcome_credit = (
+                    advantage
+                    * role_signal
+                    * (1.0 - (0.35 * runtime_pressure))
+                    * role_intensity
+                )
+                normalized_role = _normalize_role(role)
+                if not normalized_role:
+                    continue
+                if normalized_role.startswith("dynamic_"):
+                    token = normalized_role[len("dynamic_") :]
+                    if token:
+                        dynamic_token_boosts[token] = round(
+                            _clamp_float(
+                                _to_float(dynamic_token_boosts.get(token), 0.0)
+                                + (alpha * 0.22 * role_outcome_credit),
+                                -4.0,
+                                4.0,
+                            ),
+                            4,
+                        )
+                        dynamic_token_credit_totals[token] = _to_float(
+                            dynamic_token_credit_totals.get(token),
+                            0.0,
+                        ) + role_outcome_credit
+                        dynamic_contract = _normalize_dynamic_contract(
+                            {
+                                "routing_policy": role_routing.get(normalized_role)
+                                or role_routing.get(token),
+                                "tools": role_tools.get(normalized_role)
+                                or role_tools.get(token),
+                            }
+                        )
+                        if dynamic_contract and role_outcome_credit > 0.0:
+                            signature = (
+                                f"{dynamic_contract.get('routing_policy', '')}|||"
+                                f"{'||'.join(dynamic_contract.get('tools', []))}"
+                            )
+                            token_votes = dynamic_contract_votes.setdefault(token, {})
+                            token_votes[signature] = _to_float(
+                                token_votes.get(signature),
+                                0.0,
+                            ) + role_outcome_credit
+                            token_payloads = dynamic_contract_payloads.setdefault(token, {})
+                            token_payloads[signature] = dynamic_contract
+                            dynamic_contract_credit_totals[token] = _to_float(
+                                dynamic_contract_credit_totals.get(token),
+                                0.0,
+                            ) + role_outcome_credit
+                    continue
+                role_boosts[normalized_role] = round(
+                    _clamp_float(
+                        _to_float(role_boosts.get(normalized_role), 0.0)
+                        + (alpha * 0.22 * role_outcome_credit),
+                        -4.0,
+                        4.0,
+                    ),
+                    4,
+                )
+                role_credit_totals[normalized_role] = _to_float(
+                    role_credit_totals.get(normalized_role),
+                    0.0,
+                ) + role_outcome_credit
+                route = role_routing.get(normalized_role)
+                if route and role_outcome_credit > 0.0:
+                    role_votes = routing_votes.setdefault(normalized_role, {})
+                    role_votes[route] = _to_float(role_votes.get(route), 0.0) + role_outcome_credit
+                tools = role_tools.get(normalized_role)
+                if tools and role_outcome_credit > 0.0:
+                    signature = "||".join(tools[:8])
+                    role_tool_votes = tool_votes.setdefault(normalized_role, {})
+                    role_tool_votes[signature] = _to_float(
+                        role_tool_votes.get(signature),
+                        0.0,
+                    ) + role_outcome_credit
 
             spawn_credits.append(
                 {
@@ -3908,6 +4823,8 @@ def train_rl_spawn_policy(
                 }
             )
 
+    role_boost_min_abs = 0.01
+    dynamic_token_boost_min_abs = 0.01
     role_boosts = {
         key: value
         for key, value in sorted(
@@ -3915,7 +4832,7 @@ def train_rl_spawn_policy(
             key=lambda item: (abs(float(item[1])), item[0]),
             reverse=True,
         )[:24]
-        if abs(_to_float(value, 0.0)) >= 0.05
+        if abs(_to_float(value, 0.0)) >= role_boost_min_abs
     }
     dynamic_token_boosts = {
         key: value
@@ -3924,7 +4841,7 @@ def train_rl_spawn_policy(
             key=lambda item: (abs(float(item[1])), item[0]),
             reverse=True,
         )[:32]
-        if abs(_to_float(value, 0.0)) >= 0.05
+        if abs(_to_float(value, 0.0)) >= dynamic_token_boost_min_abs
     }
     for role, votes in routing_votes.items():
         if not votes:
@@ -3940,6 +4857,16 @@ def train_rl_spawn_policy(
             tools = [item for item in winner[0].split("||") if item]
             if tools:
                 tool_overrides[role] = tools
+    for token, votes in dynamic_contract_votes.items():
+        if not votes:
+            continue
+        winner = max(votes.items(), key=lambda item: item[1])
+        if winner[1] <= 0:
+            continue
+        token_payloads = dynamic_contract_payloads.get(token, {})
+        contract = token_payloads.get(winner[0])
+        if contract:
+            dynamic_role_contracts[token] = contract
 
     spawn_enable_dynamic = 1 if spawn["dynamic_enabled_score"] >= 0.5 else 0
     spawn_env: dict[str, Any] = {
@@ -3971,6 +4898,8 @@ def train_rl_spawn_policy(
         spawn_env["RIM_SPAWN_ROLE_ROUTING_OVERRIDES"] = routing_overrides
     if tool_overrides:
         spawn_env["RIM_SPAWN_ROLE_TOOL_OVERRIDES"] = tool_overrides
+    if dynamic_role_contracts:
+        spawn_env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"] = dynamic_role_contracts
 
     def _credit_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         positive = sum(float(item["credit"]) for item in items if float(item["credit"]) > 0.0)
@@ -3994,6 +4923,14 @@ def train_rl_spawn_policy(
         (
             {"token": key, "credit": round(value, 6)}
             for key, value in dynamic_token_credit_totals.items()
+        ),
+        key=lambda item: abs(float(item["credit"])),
+        reverse=True,
+    )[:12]
+    dynamic_contract_credit_ranked = sorted(
+        (
+            {"token": key, "credit": round(value, 6)}
+            for key, value in dynamic_contract_credit_totals.items()
         ),
         key=lambda item: abs(float(item["credit"])),
         reverse=True,
@@ -4029,6 +4966,7 @@ def train_rl_spawn_policy(
             "spawn": _credit_summary(spawn_credits),
             "role_boosts": role_credit_ranked,
             "dynamic_token_boosts": token_credit_ranked,
+            "dynamic_role_contracts": dynamic_contract_credit_ranked,
         },
         "recommended_exports": spawn_payload["recommended_exports"],
     }

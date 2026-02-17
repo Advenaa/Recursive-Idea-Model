@@ -542,6 +542,10 @@ def test_calibrate_specialist_arbitration_policy_recommends_more_specialist_capa
     assert env["RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP"] == 1
     assert env["RIM_SPECIALIST_ARBITRATION_MAX_JOBS"] >= 2
     assert env["RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE"] > 0.78
+    assert env["RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER"] == 1
+    assert env["RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS"] >= 1
+    assert env["RIM_SPECIALIST_CONTRACT_MIN_ROUNDS"] >= 1
+    assert env["RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES"] >= 1
 
 
 def test_train_specialist_arbitration_policy_aggregates_reports() -> None:
@@ -555,6 +559,7 @@ def test_train_specialist_arbitration_policy_aggregates_reports() -> None:
             "runs": [
                 {
                     "status": "completed",
+                    "quality": {"quality_score": 0.63},
                     "telemetry": {
                         "disagreement_count": 2,
                         "diversity_flagged_count": 1,
@@ -572,6 +577,7 @@ def test_train_specialist_arbitration_policy_aggregates_reports() -> None:
             "runs": [
                 {
                     "status": "completed",
+                    "quality": {"quality_score": 0.74},
                     "telemetry": {
                         "disagreement_count": 1,
                         "diversity_flagged_count": 0,
@@ -591,6 +597,10 @@ def test_train_specialist_arbitration_policy_aggregates_reports() -> None:
     assert "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP" in env
     assert "RIM_SPECIALIST_ARBITRATION_MAX_JOBS" in env
     assert "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE" in env
+    assert "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER" in env
+    assert "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS" in env
+    assert "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS" in env
+    assert "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES" in env
     assert payload["recommended_exports"]
 
 
@@ -643,6 +653,7 @@ def test_train_arbitration_policy_aggregates_reports() -> None:
             "runs": [
                 {
                     "status": "completed",
+                    "quality": {"quality_score": 0.63},
                     "telemetry": {
                         "disagreement_count": 3,
                         "arbitration_resolved_count": 1,
@@ -660,6 +671,7 @@ def test_train_arbitration_policy_aggregates_reports() -> None:
             "runs": [
                 {
                     "status": "completed",
+                    "quality": {"quality_score": 0.74},
                     "telemetry": {
                         "disagreement_count": 1,
                         "arbitration_resolved_count": 1,
@@ -695,10 +707,24 @@ def test_train_spawn_policy_aggregates_reports() -> None:
             "runs": [
                 {
                     "status": "completed",
+                    "quality": {"quality_score": 0.63},
                     "telemetry": {
                         "disagreement_count": 3,
                         "spawn_selected_count": 3,
                         "spawn_dynamic_count": 2,
+                        "spawn_selected_roles": ["security", "dynamic_aodkinv"],
+                        "spawn_role_routing": {
+                            "dynamic_aodkinv": "prioritize_domain_specific_signals",
+                        },
+                        "spawn_role_tools": {
+                            "dynamic_aodkinv": ["context_probe:aodkinv", "evidence_scan"],
+                        },
+                        "specialist_selected_roles": ["security", "security"],
+                        "specialist_role_action_counts": {
+                            "security": {"merge": 2, "escalate": 0, "drop": 0, "total": 2}
+                        },
+                        "specialist_role_avg_match_score": {"security": 1.8},
+                        "specialist_top_action": "merge",
                     },
                 }
             ],
@@ -712,10 +738,24 @@ def test_train_spawn_policy_aggregates_reports() -> None:
             "runs": [
                 {
                     "status": "completed",
+                    "quality": {"quality_score": 0.74},
                     "telemetry": {
                         "disagreement_count": 1,
                         "spawn_selected_count": 2,
                         "spawn_dynamic_count": 1,
+                        "spawn_selected_roles": ["security", "dynamic_aodkinv"],
+                        "spawn_role_routing": {
+                            "dynamic_aodkinv": "prioritize_domain_specific_signals",
+                        },
+                        "spawn_role_tools": {
+                            "dynamic_aodkinv": ["context_probe:aodkinv", "counterexample_search"],
+                        },
+                        "specialist_selected_roles": ["security", "security"],
+                        "specialist_role_action_counts": {
+                            "security": {"merge": 2, "escalate": 0, "drop": 0, "total": 2}
+                        },
+                        "specialist_role_avg_match_score": {"security": 1.4},
+                        "specialist_top_action": "merge",
                     },
                 }
             ],
@@ -731,6 +771,10 @@ def test_train_spawn_policy_aggregates_reports() -> None:
     assert "RIM_SPAWN_MIN_ROLE_SCORE" in env
     assert "RIM_SPAWN_MAX_SPECIALISTS_DEEP" in env
     assert "RIM_ENABLE_DYNAMIC_SPECIALISTS" in env
+    assert "RIM_SPAWN_ROLE_BOOSTS" in env
+    assert "security" in env["RIM_SPAWN_ROLE_BOOSTS"]
+    assert "RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS" in env
+    assert "aodkinv" in env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"]
     assert payload["recommended_exports"]
 
 
@@ -822,6 +866,10 @@ def test_train_online_depth_and_arbitration_policies_blends_prior() -> None:
             "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP": 1,
             "RIM_SPECIALIST_ARBITRATION_MAX_JOBS": 1,
             "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE": 0.7,
+            "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER": 1,
+            "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS": 16,
+            "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS": 3,
+            "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES": 2,
         },
         prior_arbitration_policy_env={
             "RIM_ENABLE_DISAGREEMENT_ARBITRATION": 1,
@@ -837,6 +885,8 @@ def test_train_online_depth_and_arbitration_policies_blends_prior() -> None:
     arbitration_env = payload["arbitration_policy"]["policy_env"]
     assert "RIM_DEPTH_ALLOCATOR_MIN_CONFIDENCE" in depth_env
     assert "RIM_SPECIALIST_ARBITRATION_MAX_JOBS" in specialist_env
+    assert "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER" in specialist_env
+    assert "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS" in specialist_env
     assert "RIM_ARBITRATION_MAX_JOBS" in arbitration_env
     assert payload["recommended_exports"]
 
@@ -945,6 +995,11 @@ def test_train_rl_spawn_policy_outputs_credit_assignment() -> None:
                         "spawn_max_specialists_config": 4,
                         "spawn_max_dynamic_specialists_config": 2,
                         "spawn_dynamic_enabled_config": True,
+                        "specialist_selected_roles": ["security"],
+                        "specialist_role_action_counts": {
+                            "security": {"merge": 2, "escalate": 0, "drop": 0, "total": 2}
+                        },
+                        "specialist_role_avg_match_score": {"security": 1.7},
                     },
                 },
                 {
@@ -970,6 +1025,11 @@ def test_train_rl_spawn_policy_outputs_credit_assignment() -> None:
                         "spawn_max_specialists_config": 2,
                         "spawn_max_dynamic_specialists_config": 1,
                         "spawn_dynamic_enabled_config": True,
+                        "specialist_selected_roles": ["finance"],
+                        "specialist_role_action_counts": {
+                            "finance": {"merge": 1, "escalate": 0, "drop": 0, "total": 1}
+                        },
+                        "specialist_role_avg_match_score": {"finance": 1.1},
                     },
                 },
             ],
@@ -990,6 +1050,10 @@ def test_train_rl_spawn_policy_outputs_credit_assignment() -> None:
     assert "RIM_SPAWN_MIN_ROLE_SCORE" in env
     assert "RIM_SPAWN_MAX_SPECIALISTS_DEEP" in env
     assert "RIM_SPAWN_ROLE_ROUTING_OVERRIDES" in env
+    assert "RIM_SPAWN_ROLE_BOOSTS" in env
+    assert "RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS" in env
+    assert "bioinformatics" in env["RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS"]
+    assert "security" in env["RIM_SPAWN_ROLE_BOOSTS"]
     assert payload["recommended_exports"]
 
 

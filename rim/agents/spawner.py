@@ -188,6 +188,45 @@ def _coerce_tool_map(value: object) -> dict[str, list[str]]:
     return parsed
 
 
+def _normalize_dynamic_token(value: object) -> str:
+    token = str(value or "").strip().lower()
+    if token.startswith("dynamic_"):
+        token = token[len("dynamic_") :]
+    return token
+
+
+def _coerce_dynamic_contract(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    routing_policy = str(
+        value.get("routing_policy")
+        or value.get("routing")
+        or value.get("route")
+        or ""
+    ).strip()
+    tools = _coerce_tools(value.get("tools"))
+    contract: dict[str, Any] = {}
+    if routing_policy:
+        contract["routing_policy"] = routing_policy
+    if tools:
+        contract["tools"] = tools
+    return contract
+
+
+def _coerce_dynamic_contract_map(value: object) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    parsed: dict[str, dict[str, Any]] = {}
+    for key, item in value.items():
+        token = _normalize_dynamic_token(key)
+        if not token:
+            continue
+        contract = _coerce_dynamic_contract(item)
+        if contract:
+            parsed[token] = contract
+    return parsed
+
+
 def _parse_json_env(name: str) -> object | None:
     raw = os.getenv(name)
     if raw is None:
@@ -226,6 +265,19 @@ def _parse_tool_map_env(name: str, default: dict[str, list[str]]) -> dict[str, l
     if payload is None:
         return {key: list(value) for key, value in default.items()}
     return _coerce_tool_map(payload)
+
+
+def _parse_dynamic_contract_map_env(
+    name: str,
+    default: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    payload = _parse_json_env(name)
+    if payload is None:
+        return {
+            token: dict(contract)
+            for token, contract in default.items()
+        }
+    return _coerce_dynamic_contract_map(payload)
 
 
 def _extract_policy_env(payload: object) -> dict[str, object]:
@@ -267,6 +319,7 @@ def _load_spawn_policy_env(path_value: str) -> tuple[dict[str, object], str | No
         "RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS",
         "RIM_SPAWN_ROLE_ROUTING_OVERRIDES",
         "RIM_SPAWN_ROLE_TOOL_OVERRIDES",
+        "RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS",
     }
     filtered = {key: value for key, value in env.items() if key in allowed}
     if not filtered:
@@ -396,6 +449,7 @@ def build_spawn_plan(
     dynamic_token_boosts_default: dict[str, float] = {}
     role_routing_overrides_default: dict[str, str] = {}
     role_tool_overrides_default: dict[str, list[str]] = {}
+    dynamic_role_contracts_default: dict[str, dict[str, Any]] = {}
     if spawn_policy_env:
         min_role_score_default = _coerce_float(
             spawn_policy_env.get("RIM_SPAWN_MIN_ROLE_SCORE"),
@@ -441,6 +495,9 @@ def build_spawn_plan(
         role_tool_overrides_default = _coerce_tool_map(
             spawn_policy_env.get("RIM_SPAWN_ROLE_TOOL_OVERRIDES")
         )
+        dynamic_role_contracts_default = _coerce_dynamic_contract_map(
+            spawn_policy_env.get("RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS")
+        )
     min_role_score = _parse_float_env(
         "RIM_SPAWN_MIN_ROLE_SCORE",
         min_role_score_default,
@@ -476,6 +533,10 @@ def build_spawn_plan(
     role_tool_overrides = _parse_tool_map_env(
         "RIM_SPAWN_ROLE_TOOL_OVERRIDES",
         role_tool_overrides_default,
+    )
+    dynamic_role_contracts = _parse_dynamic_contract_map_env(
+        "RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS",
+        dynamic_role_contracts_default,
     )
     adaptive_role_boosts_map = _coerce_float_map(
         adaptive_role_boosts or {},
@@ -548,12 +609,16 @@ def build_spawn_plan(
             if score < min_role_score:
                 continue
             dynamic_role = f"dynamic_{token}"
+            dynamic_contract = dynamic_role_contracts.get(token) or {}
+            contract_routing_policy = str(dynamic_contract.get("routing_policy") or "").strip()
+            contract_tools = _coerce_tools(dynamic_contract.get("tools"))
             routing_policy = (
                 role_routing_overrides.get(dynamic_role)
                 or role_routing_overrides.get(token)
+                or contract_routing_policy
                 or "prioritize_domain_specific_signals"
             )
-            tools = role_tool_overrides.get(dynamic_role) or role_tool_overrides.get(token) or [
+            tools = role_tool_overrides.get(dynamic_role) or role_tool_overrides.get(token) or contract_tools or [
                 f"context_probe:{token}",
                 "evidence_scan",
                 "counterexample_search",
@@ -617,6 +682,7 @@ def build_spawn_plan(
         "adaptive_boosts_applied": bool(adaptive_role_boosts_map),
         "adaptive_meta": dict(adaptive_meta or {}),
         "dynamic_token_boosts": dynamic_token_boosts,
+        "dynamic_role_contracts": dynamic_role_contracts,
         "role_routing_overrides": role_routing_overrides,
         "role_tool_overrides": role_tool_overrides,
         "policy_applied": bool(spawn_policy_env),

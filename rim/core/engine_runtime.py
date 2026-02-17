@@ -230,6 +230,10 @@ def _load_specialist_policy_env(path_value: str) -> tuple[dict[str, object], str
         "RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP",
         "RIM_SPECIALIST_ARBITRATION_MAX_JOBS",
         "RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE",
+        "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER",
+        "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS",
+        "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS",
+        "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES",
     }
     filtered = {key: value for key, value in env.items() if key in allowed}
     if not filtered:
@@ -778,25 +782,52 @@ class RimExecutionEngine:
                 lower=0.0,
                 upper=1.0,
             )
+            specialist_contract_controller_enabled_default = request.mode == "deep"
+            specialist_contract_lookback_runs_default = 24
+            specialist_contract_min_rounds_default = 4
+            specialist_contract_min_role_samples_default = 2
+            if specialist_policy_env:
+                specialist_contract_controller_enabled_default = _coerce_bool(
+                    specialist_policy_env.get("RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER"),
+                    specialist_contract_controller_enabled_default,
+                )
+                specialist_contract_lookback_runs_default = _coerce_int(
+                    specialist_policy_env.get("RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS"),
+                    specialist_contract_lookback_runs_default,
+                    lower=1,
+                    upper=500,
+                )
+                specialist_contract_min_rounds_default = _coerce_int(
+                    specialist_policy_env.get("RIM_SPECIALIST_CONTRACT_MIN_ROUNDS"),
+                    specialist_contract_min_rounds_default,
+                    lower=1,
+                    upper=200,
+                )
+                specialist_contract_min_role_samples_default = _coerce_int(
+                    specialist_policy_env.get("RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES"),
+                    specialist_contract_min_role_samples_default,
+                    lower=1,
+                    upper=50,
+                )
             specialist_contract_controller_enabled = _parse_bool_env(
                 "RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER",
-                request.mode == "deep",
+                specialist_contract_controller_enabled_default,
             )
             specialist_contract_lookback_runs = _parse_int_env(
                 "RIM_SPECIALIST_CONTRACT_LOOKBACK_RUNS",
-                24,
+                specialist_contract_lookback_runs_default,
                 lower=1,
                 upper=500,
             )
             specialist_contract_min_rounds = _parse_int_env(
                 "RIM_SPECIALIST_CONTRACT_MIN_ROUNDS",
-                4,
+                specialist_contract_min_rounds_default,
                 lower=1,
                 upper=200,
             )
             specialist_contract_min_role_samples = _parse_int_env(
                 "RIM_SPECIALIST_CONTRACT_MIN_ROLE_SAMPLES",
-                2,
+                specialist_contract_min_role_samples_default,
                 lower=1,
                 upper=50,
             )

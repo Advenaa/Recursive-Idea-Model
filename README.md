@@ -184,6 +184,8 @@ rim eval train-rl-policy --reports-dir rim/eval/reports --target-quality 0.65 --
 rim eval train-rl-spawn-policy --reports-dir rim/eval/reports --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.18 --epochs 3
 rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --optimizer rl --target-quality 0.65 --target-runtime-sec 60 --learning-rate 0.35 --rl-epochs 3
 # autolearn updates depth/specialist/arbitration/spawn/memory policy files under rim/eval/policies by default
+# specialist policy includes contract-controller defaults
+# spawn policy can include specialist outcome-informed role boosts + dynamic token routing/tool contracts
 ```
 
 Provider env vars:
@@ -243,7 +245,8 @@ export RIM_ARBITRATION_POLICY_PATH=rim/eval/policies/arbitration_policy.json
 export RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP=1
 export RIM_SPECIALIST_ARBITRATION_MAX_JOBS=2
 export RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE=0.78
-# Optional trained specialist policy file from `rim eval train-specialist-policy` output
+# Optional trained specialist policy file from `rim eval train-specialist-policy` output.
+# This policy can also carry specialist contract-controller defaults.
 export RIM_SPECIALIST_POLICY_PATH=rim/eval/policies/specialist_policy.json
 # Runtime specialist contract controller (auto-adjust spawn role boosts from recent specialist arbitration telemetry)
 export RIM_ENABLE_SPECIALIST_CONTRACT_CONTROLLER=1
@@ -256,6 +259,7 @@ export RIM_SPAWN_MAX_SPECIALISTS_FAST=1
 export RIM_ENABLE_DYNAMIC_SPECIALISTS=1
 export RIM_SPAWN_MAX_DYNAMIC_SPECIALISTS=2
 export RIM_SPAWN_ROLE_BOOSTS='{"security":0.4}'
+export RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS='{"bioinformatics":{"routing_policy":"prioritize_domain_specific_signals","tools":["context_probe:bioinformatics","evidence_scan"]}}'
 export RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS='{"bioinformatics":0.7}'
 export RIM_SPAWN_ROLE_ROUTING_OVERRIDES='{"security":"prioritize_high_severity_and_compliance_constraints"}'
 export RIM_SPAWN_ROLE_TOOL_OVERRIDES='{"security":["threat_model","policy_checklist"]}'
