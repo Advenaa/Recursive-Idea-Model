@@ -20,6 +20,7 @@ rim = "rim.cli:main"
 [tool.setuptools]
 packages = [
   "rim",
+  "rim.engine",
   "rim.api",
   "rim.core",
   "rim.agents",

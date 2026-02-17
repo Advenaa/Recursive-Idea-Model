@@ -44,6 +44,20 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - Deterministic single-pass baseline + regression gate (`rim eval baseline`, `rim eval gate`)
 - Local CLI entrypoint (`rim/cli.py`)
 
+Embed in another project:
+
+```python
+import asyncio
+
+from rim.engine import build_orchestrator
+from rim.core.schemas import AnalyzeRequest
+
+orchestrator = build_orchestrator()
+request = AnalyzeRequest(idea="Your product idea", mode="deep")
+result = asyncio.run(orchestrator.analyze(request))
+print(result.synthesized_idea)
+```
+
 Quickstart:
 
 ```bash
