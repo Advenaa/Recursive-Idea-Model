@@ -272,74 +272,55 @@ Each run must return JSON with this minimum schema:
 - Add HTTP-backed advanced data-reference verification path (`data: ... | url=https://...`) with explicit runtime safety controls (`RIM_ADV_VERIFY_ALLOW_HTTP_DATA`, timeout/max-bytes caps, optional host allowlist via `RIM_ADV_VERIFY_HTTP_ALLOWED_HOSTS`) for broader external evidence checks (done on February 17, 2026)
 - Add bundled RL orchestration trainer (`rim eval train-rl-orchestration-policy`) and RL autolearn integration path so depth/specialist/arbitration/spawn/memory updates can be emitted as one coordinated RL bundle output (done on February 17, 2026)
 
-## 20) SOTA Alignment Status (vs `rim_paper_4.docx`)
+## 20) SOTA Alignment Status (vs `rim_paper_5.docx`)
 
-Status date: February 17, 2026
+Status date: February 18, 2026
 
-The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet complete.
+RIM v5 execution architecture is in place (including PI-first runtime), but full paper-parity for learned orchestration and security-hardening is not yet complete.
 
-### 20.1 Implemented
+### 20.1 Implemented in v5
 
-- Recursive decomposition tree with stop conditions (depth, confidence, marginal gain, runtime, branch budget).
-- Parallel typed challenge layer (logic, evidence, execution, adversarial critics).
-- Structured synthesis with deep-mode multi-pass refinement.
-- Deep mode default across API and CLI.
-- Persistent run artifacts, memory retrieval filters, and feedback-driven memory rescoring.
-- Explicit run controls: cancel/retry in API (`/runs/{id}/cancel`, `/runs/{id}/retry`) and CLI (`rim run cancel`, `rim run retry`).
-- Domain-weighted quality rubric and domain-level benchmark analytics (`domain_metrics`, `domain_deltas`).
-- Blind-review workflow for evaluator packets (`rim eval blindpack` + anonymized packet output).
-- Provider orchestration guardrails (fallbacks, retries, determinism controls, and run budgets).
-- Benchmark/eval workflow with baseline, compare, and gate.
-- Reusable execution runtime split from orchestration (`RimExecutionEngine` + thin `RimOrchestrator` adapter).
-- Public embedding API (`rim.engine`) with `build_engine`, `build_orchestrator`, and `build_agents`.
-- Modular agent-pack registry (`EngineAgentRegistry`) with validated stage overrides for external product integration.
-- Config-driven pack loader (`load_agent_packs_config`) and env-based pack activation path used by API/CLI startup.
-- Real single-call LLM baseline path (`rim eval baseline-llm`) for practical comparisons against normal deep-thinking model calls.
-- Runtime long-horizon memory quality controller that reads recent fold telemetry and adaptively tightens fold parameters when degradation pressure rises.
-- Native formal symbolic constraint checks in advanced verification (`formal:` / `theorem:` / `constraint:`) with z3-first backend, prove/satisfiable/refute modes, assumptions, bounded symbolic domains, counterexample traces, and explicit fallback controls.
-- Optional HTTP-backed advanced data reference checks (`data: ... | url=https://...`) with explicit runtime safety controls (opt-in + timeout/max-bytes caps + optional host allowlist).
-- Contract-aware specialist arbitration that scores spawned specialist contracts per disagreement node, injects role/tool routing context into specialist arbitration prompts, and records selected specialist contract metadata.
-- Telemetry-driven specialist contract controller that learns role-level boost adjustments from recent arbitration outcomes and applies those adjustments to runtime spawn scoring.
-- Eval/autolearn policy integration for specialist contract control and spawn adaptation: specialist policy can now load/save controller defaults, and spawn policy calibration/RL training consume specialist role outcome telemetry to update role boosts.
-- Dynamic specialist contract learning in spawn policy loops: calibration/RL training now derive token-level spawn boosts (`RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS`), routing/tool contracts for dynamic roles (`RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS`), and a learned default fallback contract (`RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT`) for unseen dynamic tokens; runtime spawn planning applies role/token overrides first, then token/default contracts, then generic dynamic defaults.
-- RL memory policy loop with controller-default learning: `train-rl-memory-policy` and RL autolearn now optimize fold + memory-quality-controller settings from run telemetry and can persist controller defaults in memory policy artifacts.
-- Bundled RL orchestration training (`train-rl-orchestration-policy`) now packages coordinated RL policy artifacts for depth/specialist/arbitration/spawn/memory and powers RL autolearn update steps.
+- PI-first provider runtime with compatibility fallback (`RIM_PROVIDER_ORDER=pi,codex,claude`) and strict PI-only mode (`RIM_PI_ONLY=1`).
+- Recursive decomposition, parallel critics, reconciliation/arbitration, synthesis, verification, and memory folding in one staged pipeline.
+- Determinism/reliability controls: retry/backoff, JSON repair retries, budget gates (calls/latency/tokens/cost), and structured stage errors.
+- API/CLI run controls: idempotent `run_id`, queue/cancel/retry paths, and stage-log telemetry.
+- Advanced verification surfaces: executable checks, formal symbolic checks, solver/simulation/data adapters, and optional HTTP-backed data checks with safety caps.
+- Benchmark/evaluation stack: deterministic baseline, single-call LLM baselines (`pi|claude|codex`), compare/gate/duel workflows, and blind-review packet generation.
+- Policy training + autolearn surfaces for depth, arbitration, specialist, spawn, and memory policy artifacts.
+- Validation snapshot: `163` passing tests (`pytest -q`, February 18, 2026).
 
-### 20.2 Partially Implemented
+### 20.2 Partially Implemented (still maturing)
 
-- Learning layer:
-  persistent memory and feedback exist, with cycle-level memory folding into episodic/working/tool entries plus fold-version/degradation telemetry, offline memory-policy training (`rim eval train-memory-policy`), RL-style memory credit assignment training (`rim eval train-rl-memory-policy`), runtime policy loading (`RIM_MEMORY_POLICY_PATH`), autolearn-driven online policy refresh (`rim eval autolearn` with blend/RL paths), and runtime long-horizon fold guardrails from recent telemetry (`RIM_ENABLE_MEMORY_QUALITY_CONTROLLER`, `RIM_MEMORY_QUALITY_LOOKBACK_RUNS`, `RIM_MEMORY_QUALITY_MIN_FOLDS`); no fully learned memory quality meta-model for decomposition/challenge/synthesis policy updates yet.
-- Orchestration depth/breadth policy:
-  recursive cycle controller and heuristic DepthAllocator exist, with benchmark-driven calibration/training (`rim eval calibrate`, `rim eval train-policy`), automated online update loop (`rim eval autolearn` with `RIM_DEPTH_POLICY_PATH`), RL-style reward/advantage credit assignment (`rim eval train-rl-policy`), and bundled RL orchestration packaging across depth/specialist/arbitration/spawn/memory (`rim eval train-rl-orchestration-policy`) available; full PARL/ARPO/AEPO-grade policy optimization is still missing.
-- Challenge reconciliation:
-  consensus/disagreement aggregation, disagreement arbitration, confidence-triggered devil's-advocate follow-up rounds, role-diversity guardrails, specialist follow-up arbitration loops with contract-aware spawn-plan role/tool routing, benchmark telemetry capture, runtime specialist contract boost adaptation from recent arbitration telemetry, offline arbitration/specialist policy training (`rim eval train-arbitration-policy`, `rim eval train-specialist-policy` + `RIM_ARBITRATION_POLICY_PATH`, `RIM_SPECIALIST_POLICY_PATH`) including controller-default keys, automated online arbitration/specialist updates (`rim eval autolearn`), and RL-style reward/advantage arbitration + specialist credit assignment (`rim eval train-rl-policy`) are implemented; full multi-agent RL arbitration training remains missing.
-- Verification layer:
-  deterministic post-synthesis checks, safe executable expressions, optional timed `python_exec` checks, baseline advanced adapters (`solver:`, `simulate:`, `data:`) including optional HTTP-backed `data` URL sources with explicit runtime safety caps and optional host allowlist controls, native formal symbolic checks (`formal:`/`theorem:`/`constraint:` with z3-first backend, proof modes, assumptions, and counterexample traces), and pluggable external adapter command hooks are implemented; full theorem-prover-grade verification loops and production external integrations are still missing.
-- Specialization layer:
-  domain-specialist spawning and scored heuristic role-selection are implemented (with thresholded specialist budgets, rationale metadata, policy-driven tool-routing/tool-contract overrides, offline spawn-policy training via `rim eval train-spawn-policy`, RL-style spawn credit assignment via `rim eval train-rl-spawn-policy`, specialist outcome-informed role-boost updates from arbitration telemetry, dynamic token spawn-score learning via `RIM_SPAWN_DYNAMIC_TOKEN_BOOSTS`, dynamic token routing/tool contract learning via `RIM_SPAWN_DYNAMIC_ROLE_CONTRACTS`, learned default dynamic fallback contracts via `RIM_SPAWN_DYNAMIC_DEFAULT_CONTRACT`, runtime policy loading via `RIM_SPAWN_POLICY_PATH`, and autolearn-driven online spawn policy refresh), but no fully learned generative multi-role agent factory.
+- Learned orchestration quality:
+  depth/arbitration/specialist/spawn/memory policy loops exist, but optimization is still mostly heuristic + RL-light credit assignment.
+- Memory quality meta-control:
+  runtime guardrails and fold telemetry adaptation exist, but no fully learned meta-model controlling decomposition/challenge/synthesis memory policy end-to-end.
+- Neuro-symbolic verification depth:
+  practical symbolic/executable adapters are implemented, but theorem-prover-grade closed-loop verification and richer production integrations remain incomplete.
+- Specialization generation:
+  dynamic token contracts and role boosts are implemented, but no fully learned generative role/tool factory.
 
-### 20.3 Missing / Slacking Against SOTA Paper
+### 20.3 Remaining Gaps to Paper-Parity
 
-- Fully learned dynamic agent spawning and specialization (AgentSpawner-style policy-trained role/tool generation beyond current heuristic+RL-light role/tool policy updates).
-- Full neuro-symbolic verification loops (theorem-prover-grade formal tooling, richer simulation, and production external data-backed execution).
-- Fully learned long-horizon memory quality controller/meta-model and adaptive fold policy optimization across decomposition/challenge/synthesis.
-- Full RL-based orchestration training (PARL/ARPO/AEPO-style multi-agent policy optimization beyond current lightweight reward/advantage credit assignment).
+- Fully learned dynamic spawning and specialization (policy-trained role/tool generation beyond heuristic + RL-light updates).
+- PARL/ARPO/AEPO-grade orchestration policy optimization across recursive cycles.
+- Fully learned long-horizon memory quality controller/meta-model.
+- Stronger production security hardening for tool/runtime boundaries (least-privilege-by-default and broader injection-resilience coverage).
 
-### 20.4 Gap-Closure Priorities
+### 20.4 Updated Gap-Closure Priorities
 
-1. P0: harden recursive cycle controller + DepthAllocator thresholds with benchmark-backed calibration and automated policy updates (`rim eval calibrate`, `rim eval calibrate-loop`, `rim eval autolearn` implemented).
-2. P0: evolve specialist arbitration from current heuristic+online+RL-light policy defaults (now contract-aware and telemetry-adaptive with spawn role-boost adjustments) to full RL adaptive specialist policy and learned role-contract generation.
-3. P1: evolve specialization from current heuristic + offline/RL-light spawn policies + telemetry role-boost adaptation and static/dynamic token rules to fully learned dynamic role/tool generation contracts.
-4. P1: extend advanced verification from local adapters to formal theorem/constraint tooling and external simulation/data integrations.
-5. P2: evolve memory from current episodic/working/tool stores + online policy refresh + telemetry-driven runtime guardrails to fully learned long-horizon adaptive fold-quality optimization.
-6. P3: evolve current offline heuristic policy training (`rim eval train-policy`) to learned policy optimization and credit assignment.
+1. P0: harden recursive-cycle policy with benchmark-backed calibration and automated online updates (depth + arbitration + specialist + spawn + memory).
+2. P0: move specialist/spawn from heuristic contracts to learned dynamic role/tool generation contracts.
+3. P1: upgrade advanced verification toward theorem-prover-grade loops and richer external simulation/data integrations.
+4. P1: implement replayable determinism-faithfulness assurance harness for trajectory-level auditability.
+5. P2: evolve memory controller from telemetry guardrails to fully learned long-horizon adaptive fold/retrieval policy.
+6. P2: tighten runtime tool-risk controls toward least-privilege default enforcement.
 
-### 20.5 Delivery Stages for Paper Parity
+### 20.5 Delivery Stages for Paper-Parity
 
-1. v0.2: tune recursive cycle controller + expand reconciliation + stronger evaluation pack.
-2. v0.3: specialization layer + external verification tools.
-3. v0.4: tripartite memory + folding.
-4. v0.5: RL orchestration training and policy rollout.
+1. v0.3: learned specialization/spawn upgrades + external verification expansion + tool-risk hardening baseline.
+2. v0.4: long-horizon memory-controller upgrade + replayable determinism-faithfulness evaluation harness.
+3. v0.5: full RL orchestration optimization rollout and policy stabilization.
 
 ## 21) Refactor Directive: PI-First Runtime Replacement
 
