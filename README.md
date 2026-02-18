@@ -24,7 +24,7 @@ The project default is **Deep mode**.
 ## Product Document
 
 - `PRD.md` - Product Requirements Document for RIM MVP (Deep mode default)
-- `TECH_SPEC.md` - Technical implementation spec (Codex CLI + Claude CLI execution)
+- `TECH_SPEC.md` - Technical implementation spec (PI-first provider execution with Codex/Claude fallback)
 
 ## MVP Scaffold
 
@@ -44,6 +44,43 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - Blind-review packet generator for report evaluation (`rim eval blindpack`)
 - Deterministic baseline + real single-call LLM baselines + regression gate (`rim eval baseline`, `rim eval baseline-llm`, `rim eval gate`)
 - Local CLI entrypoint (`rim/cli.py`)
+
+## How Flow Works
+
+The main runtime path is:
+
+1. Input arrives from API (`/analyze`) or CLI (`rim analyze`).
+2. `RimOrchestrator` creates/loads a run and delegates execution to `RimExecutionEngine`.
+3. Engine stages execute in order:
+   - decomposition (`rim/agents/decomposer.py`)
+   - parallel critics (`rim/agents/critics.py`)
+   - reconciliation/arbitration (`rim/agents/reconciliation.py`, `rim/agents/arbitrator.py`)
+   - synthesis (`rim/agents/synthesizer.py`)
+   - verification (`rim/agents/verification.py`, optional executable/advanced verification)
+   - memory folding + persistence (`rim/core/memory_folding.py`, `rim/storage/repo.py`)
+4. Each stage calls the provider router (`rim/providers/router.py`) for model output.
+5. Router selects providers by stage policy (default PI-first), applies retry/repair logic, and enforces run budgets.
+6. Run result, stage logs, telemetry, and errors are written to SQLite via `RunRepository`.
+
+Provider routing behavior:
+
+- Default order is `pi,codex,claude` (`RIM_PROVIDER_ORDER`).
+- Set `RIM_PI_ONLY=1` for strict PI-only mode (no fallback to Codex/Claude).
+- `rim health` shows provider availability and DB status.
+
+Run states:
+
+- `queued -> running -> completed`
+- failure paths: `failed`, `partial`, `canceled`
+
+Useful flow debug commands:
+
+```bash
+rim health
+rim analyze --idea "Build an AI CFO for freelancers" --mode fast --json
+rim run list --limit 5
+rim run logs <run_id>
+```
 
 Embed in another project:
 
@@ -193,6 +230,19 @@ rim eval autolearn --mode deep --limit 10 --iterations 3 --lookback-reports 8 --
 # memory policy can include memory-quality-controller defaults under RL autolearn
 ```
 
+PI setup (required for PI-backed calls):
+
+```bash
+pi --list-models
+# if not logged in:
+pi
+# then use /login and pick provider(s)
+
+# optional pinning for RIM PI adapter:
+export RIM_PI_PROVIDER=openai-codex
+export RIM_PI_MODEL=gpt-5.1-codex-mini
+```
+
 Provider env vars:
 
 ```bash
@@ -257,7 +307,6 @@ export RIM_ARBITRATION_POLICY_PATH=rim/eval/policies/arbitration_policy.json
 export RIM_ENABLE_SPECIALIST_ARBITRATION_LOOP=1
 export RIM_SPECIALIST_ARBITRATION_MAX_JOBS=2
 export RIM_SPECIALIST_ARBITRATION_MIN_CONFIDENCE=0.78
-# Optional trained specialist policy file from `rim eval train-specialist-policy` output.
 # This policy can also carry specialist contract-controller defaults.
 export RIM_SPECIALIST_POLICY_PATH=rim/eval/policies/specialist_policy.json
 # Runtime specialist contract controller (auto-adjust spawn role boosts from recent specialist arbitration telemetry)
