@@ -6,7 +6,7 @@ Recursive Idea Model (RIM) MVP
 
 ## Version
 
-v0.1 (updated February 17, 2026)
+v0.2-draft (updated February 18, 2026)
 
 ## 1) Purpose
 
@@ -30,6 +30,7 @@ Most AI workflows produce one-pass answers that are broad but shallow. Users nee
 3. Produce outputs with clear "before -> after" improvement.
 4. Persist run memory to improve future analyses.
 5. Ship a usable developer-facing interface (CLI or API-first).
+6. Replace bespoke provider execution with a PI-first runtime while preserving RIM analysis semantics and output contracts.
 
 ## 4) Non-Goals (MVP)
 
@@ -252,6 +253,7 @@ Each run must return JSON with this minimum schema:
 
 ## 19) Post-MVP Roadmap (v0.2)
 
+- PI-first core refactor: replace direct Codex/Claude provider orchestration with PI as the primary execution runtime across decomposition, critique, synthesis, and benchmark baselines (planned; starts February 18, 2026)
 - Replace heuristic scoring with a stronger domain-weighted rubric (done on February 14, 2026)
 - Finalize a canonical 20-idea benchmark pack and blind-review process (done on February 14, 2026; `rim eval blindpack`)
 - Add explicit run cancel/retry controls in API and CLI (done on February 14, 2026)
@@ -340,3 +342,38 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 2. v0.3: specialization layer + external verification tools.
 3. v0.4: tripartite memory + folding.
 4. v0.5: RL orchestration training and policy rollout.
+
+## 21) Refactor Directive: PI-First Runtime Replacement
+
+Status date: February 18, 2026
+
+Directive: perform a total model-execution refactor so PI is the main runtime substrate for RIM.
+
+### 21.1 Scope
+
+1. Introduce PI as the default provider/runtime for all LLM-driven stages.
+2. Keep RIM orchestration semantics (recursive flow, critics, synthesis, verification, memory) and output schema intact.
+3. Preserve API and CLI interfaces unless explicitly versioned.
+4. Maintain deterministic/idempotent run behavior and existing telemetry expectations.
+
+### 21.2 Technical Outcomes Required
+
+1. Provider layer supports PI as first-class and default execution path.
+2. Stage routing defaults to PI-first ordering, with optional fallback providers.
+3. Benchmark and baseline workflows accept PI as a selectable baseline provider.
+4. Data models and validation allow `provider="pi"` in structured findings/logs.
+5. Healthcheck and failure contracts remain stable after migration.
+
+### 21.3 Migration Constraints
+
+1. No regression to existing JSON output contract in section 10.
+2. No regression to idempotent `run_id` behavior (FR-8).
+3. Existing tests must pass or be updated only where provider-name assumptions are hard-coded.
+4. Legacy Codex/Claude adapters can remain as compatibility fallbacks during migration.
+
+### 21.4 Delivery Phases
+
+1. Phase A: PRD + architecture alignment (this section) and provider contract updates.
+2. Phase B: PI adapter integration + router defaults + CLI/eval provider surfaces.
+3. Phase C: test suite updates for provider literals/order assumptions.
+4. Phase D: hardening, docs, and rollout guidance for PI subscription/API-key setups.

@@ -365,6 +365,25 @@ def test_run_duel_benchmark_supports_single_call_llm_baseline(tmp_path) -> None:
     assert payload["comparison"]["shared_run_count"] == 1
 
 
+def test_run_duel_benchmark_supports_pi_single_call_llm_baseline(tmp_path) -> None:  # noqa: ANN001
+    dataset = tmp_path / "dataset_duel_single_call_pi.jsonl"
+    dataset.write_text('{"id":"ok-1","idea":"first idea"}\n', encoding="utf-8")
+    orchestrator = MixedOutcomeOrchestratorWithRouter(provider="pi")
+    payload = asyncio.run(
+        run_duel_benchmark(
+            orchestrator=orchestrator,  # type: ignore[arg-type]
+            dataset_path=dataset,
+            mode="deep",
+            baseline_provider="pi",
+            min_quality_delta=0.0,
+            min_shared_runs=1,
+        )
+    )
+    assert payload["baseline"]["mode"] == "single_call_pi"
+    assert payload["baseline_provider"] == "pi"
+    assert payload["comparison"]["shared_run_count"] == 1
+
+
 def test_save_report_auto_paths_are_unique(tmp_path) -> None:  # noqa: ANN001
     report = {"created_at": "2026-02-14T00:00:00Z", "runs": []}
     original_reports_dir = runner.DEFAULT_REPORTS_DIR

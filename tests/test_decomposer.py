@@ -95,7 +95,7 @@ def test_recursive_decomposition_with_confidence_stop() -> None:
 
     texts = [node.component_text for node in nodes]
     assert texts == ["Root idea", "A", "B", "A1"]
-    assert provider in {"codex", "claude"}
+    assert provider in {"pi", "codex", "claude"}
     assert meta["stop_reason"] in {
         "marginal_gain",
         "max_depth",
@@ -158,6 +158,6 @@ def test_branch_budget_stop_reason() -> None:
             memory_context=[],
         )
     )
-    assert provider in {"claude", "codex"}
+    assert provider in {"pi", "claude", "codex"}
     assert len(nodes) == 2
     assert meta["stop_reason"] == "branch_budget"

@@ -262,8 +262,8 @@ def _single_call_baseline_prompt(request: AnalyzeRequest) -> str:
 
 def _normalize_llm_provider(provider: str) -> str:
     parsed = str(provider or "").strip().lower()
-    if parsed not in {"claude", "codex"}:
-        raise ValueError("provider must be one of: claude, codex")
+    if parsed not in {"pi", "claude", "codex"}:
+        raise ValueError("provider must be one of: pi, claude, codex")
     return parsed
 
 
@@ -1071,9 +1071,9 @@ async def run_duel_benchmark(
     baseline_provider: str = "proxy",
 ) -> dict[str, Any]:
     parsed_baseline_provider = str(baseline_provider or "proxy").strip().lower()
-    if parsed_baseline_provider not in {"proxy", "claude", "codex"}:
-        raise ValueError("baseline_provider must be one of: proxy, claude, codex")
-    if parsed_baseline_provider in {"claude", "codex"}:
+    if parsed_baseline_provider not in {"proxy", "pi", "claude", "codex"}:
+        raise ValueError("baseline_provider must be one of: proxy, pi, claude, codex")
+    if parsed_baseline_provider in {"pi", "claude", "codex"}:
         baseline = await run_single_call_llm_baseline(
             dataset_path=dataset_path,
             provider=parsed_baseline_provider,

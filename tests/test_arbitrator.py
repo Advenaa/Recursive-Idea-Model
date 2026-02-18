@@ -265,4 +265,4 @@ def test_run_arbitration_runs_specialist_round_for_flagged_nodes() -> None:
     assert float(specialist_round["specialist_match_score"]) > 0.0
     assert "Assigned specialist contract" in router.prompts["critic_arbitration_specialist"]
     assert "critic_security" in router.prompts["critic_arbitration_specialist"]
-    assert providers[-1] in {"codex", "claude"}
+    assert providers[-1] in {"pi", "codex", "claude"}

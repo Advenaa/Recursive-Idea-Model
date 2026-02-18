@@ -699,9 +699,9 @@ def build_parser() -> argparse.ArgumentParser:
     eval_duel.add_argument("--save-target")
     eval_duel.add_argument(
         "--baseline-provider",
-        choices=["proxy", "claude", "codex"],
+        choices=["proxy", "pi", "claude", "codex"],
         default="proxy",
-        help="baseline type: proxy=deterministic placeholder, claude/codex=single-call LLM baseline",
+        help="baseline type: proxy=deterministic placeholder, pi/claude/codex=single-call LLM baseline",
     )
     eval_duel.add_argument("--min-quality-delta", type=float, default=0.0)
     eval_duel.add_argument("--max-runtime-delta-sec", type=float)
@@ -716,9 +716,9 @@ def build_parser() -> argparse.ArgumentParser:
     eval_baseline.add_argument("--save")
     eval_baseline_llm = eval_sub.add_parser(
         "baseline-llm",
-        help="Run single-call Claude/Codex baseline benchmark",
+        help="Run single-call PI/Claude/Codex baseline benchmark",
     )
-    eval_baseline_llm.add_argument("--provider", choices=["claude", "codex"], required=True)
+    eval_baseline_llm.add_argument("--provider", choices=["pi", "claude", "codex"], required=True)
     eval_baseline_llm.add_argument("--dataset")
     eval_baseline_llm.add_argument("--mode", choices=["deep", "fast"], default="deep")
     eval_baseline_llm.add_argument("--limit", type=int)

@@ -33,7 +33,7 @@ class CriticFinding(BaseModel):
     severity: Literal["low", "medium", "high", "critical"] = "medium"
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     suggested_fix: str = Field(min_length=1)
-    provider: Literal["codex", "claude"] | None = None
+    provider: Literal["pi", "codex", "claude"] | None = None
 
 
 class AnalyzeResult(BaseModel):

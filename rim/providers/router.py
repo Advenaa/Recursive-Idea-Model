@@ -13,8 +13,11 @@ from rim.providers.base import (
 )
 from rim.providers.claude_cli import ClaudeCLIAdapter
 from rim.providers.codex_cli import CodexCLIAdapter
+from rim.providers.pi_cli import PiCLIAdapter
 
-DEFAULT_STAGE_POLICY: dict[str, list[str]] = {
+KNOWN_PROVIDERS: tuple[str, ...] = ("pi", "codex", "claude")
+DEFAULT_PROVIDER_ORDER: tuple[str, ...] = ("pi", "codex", "claude")
+DEFAULT_STAGE_TEMPLATES: dict[str, list[str]] = {
     "decompose": ["codex", "claude"],
     "critic_logic": ["codex", "claude"],
     "critic_evidence": ["claude", "codex"],
@@ -37,6 +40,44 @@ def _parse_int_env(value: str | None, default: int) -> int:
         return int(str(value))
     except (TypeError, ValueError):
         return default
+
+
+def _parse_provider_order(value: str | None) -> list[str]:
+    raw = str(value or "").replace(",", " ").split()
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for chunk in raw:
+        name = chunk.strip().lower()
+        if not name or name in seen or name not in KNOWN_PROVIDERS:
+            continue
+        seen.add(name)
+        parsed.append(name)
+    if parsed:
+        return parsed
+    return list(DEFAULT_PROVIDER_ORDER)
+
+
+def _parse_bool_env(value: str | None, default: bool = False) -> bool:
+    raw = str(value if value is not None else ("1" if default else "0")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _merge_provider_orders(primary: list[str], fallback: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for name in [*primary, *fallback]:
+        if name in seen:
+            continue
+        seen.add(name)
+        merged.append(name)
+    return merged
+
+
+def _build_default_stage_policy(provider_order: list[str]) -> dict[str, list[str]]:
+    policy: dict[str, list[str]] = {}
+    for stage, template in DEFAULT_STAGE_TEMPLATES.items():
+        policy[stage] = _merge_provider_orders(provider_order, list(template))
+    return policy
 
 
 def _with_determinism_hints(
@@ -155,6 +196,8 @@ def _estimate_call_cost_usd(provider: str, tokens_in: int, tokens_out: int) -> f
     if provider == "claude":
         # Conservative blended estimate for CLI usage.
         rate_per_1k = float(os.getenv("RIM_CLAUDE_COST_PER_1K_TOKENS", "0.015"))
+    elif provider == "pi":
+        rate_per_1k = float(os.getenv("RIM_PI_COST_PER_1K_TOKENS", "0.012"))
     else:
         rate_per_1k = float(os.getenv("RIM_CODEX_COST_PER_1K_TOKENS", "0.01"))
     return (total_tokens / 1000.0) * rate_per_1k
@@ -169,6 +212,7 @@ class ProviderRunSession:
         stage_policy: dict[str, list[str]],
         timeout_sec: int,
         budget: RunBudget,
+        default_provider_order: list[str] | None = None,
         json_repair_attempts: int = 1,
         determinism_mode: str = "strict",
         determinism_seed: int = 42,
@@ -180,6 +224,9 @@ class ProviderRunSession:
         self.stage_policy = stage_policy
         self.timeout_sec = timeout_sec
         self.budget = budget
+        self.default_provider_order = [
+            name for name in list(default_provider_order or providers.keys()) if name in providers
+        ]
         self.json_repair_attempts = max(0, int(json_repair_attempts))
         self.determinism_mode = _normalize_determinism_mode(determinism_mode)
         self.determinism_seed = int(determinism_seed)
@@ -189,7 +236,14 @@ class ProviderRunSession:
         self.provider_results: list[ProviderResult] = []
 
     def _providers_for_stage(self, stage: str) -> list[str]:
-        return self.stage_policy.get(stage, ["codex", "claude"])
+        configured = [
+            name
+            for name in self.stage_policy.get(stage, self.default_provider_order)
+            if name in self.providers
+        ]
+        if configured:
+            return configured
+        return list(self.default_provider_order)
 
     def _check_budget_before_call(self) -> None:
         if self.usage.calls >= self.budget.max_calls:
@@ -413,11 +467,22 @@ class ProviderRunSession:
 
 class ProviderRouter:
     def __init__(self, stage_policy: dict[str, list[str]] | None = None) -> None:
-        self.stage_policy = stage_policy or DEFAULT_STAGE_POLICY
+        self.pi_only = _parse_bool_env(os.getenv("RIM_PI_ONLY"), default=False)
+        self.default_provider_order = _parse_provider_order(
+            os.getenv(
+                "RIM_PROVIDER_ORDER",
+                ",".join(DEFAULT_PROVIDER_ORDER),
+            )
+        )
         self.providers = {
+            "pi": PiCLIAdapter(),
             "codex": CodexCLIAdapter(),
             "claude": ClaudeCLIAdapter(),
         }
+        if self.pi_only:
+            self.default_provider_order = ["pi"]
+            self.providers = {"pi": self.providers["pi"]}
+        self.stage_policy = stage_policy or _build_default_stage_policy(self.default_provider_order)
         self.default_timeout_sec = int(os.getenv("RIM_PROVIDER_TIMEOUT_SEC", "180"))
         self.default_budget = RunBudget(
             max_calls=int(os.getenv("RIM_RUN_MAX_PROVIDER_CALLS", "120")),
@@ -455,6 +520,7 @@ class ProviderRouter:
             stage_policy=self.stage_policy,
             timeout_sec=self.default_timeout_sec,
             budget=self.default_budget,
+            default_provider_order=self.default_provider_order,
             json_repair_attempts=self.default_json_repair_attempts,
             determinism_mode=self.default_determinism_mode,
             determinism_seed=self.default_determinism_seed,

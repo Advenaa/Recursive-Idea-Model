@@ -97,7 +97,7 @@ Each provider adapter must implement:
 3. `latency_ms`
 4. `estimated_tokens_in`
 5. `estimated_tokens_out`
-6. `provider` (`codex|claude`)
+6. `provider` (`pi|codex|claude`)
 7. `exit_code`
 
 ### 4.4 Execution Notes
@@ -108,8 +108,12 @@ Environment variables:
 
 1. `RIM_CODEX_CMD` default `codex`
 2. `RIM_CLAUDE_CMD` default `claude`
-3. `RIM_CODEX_ARGS` default `exec --skip-git-repo-check --sandbox read-only`
-4. `RIM_CLAUDE_ARGS` default `-p --output-format json`
+3. `RIM_PI_CMD` default `pi`
+4. `RIM_CODEX_ARGS` default `exec --skip-git-repo-check --sandbox read-only`
+5. `RIM_CLAUDE_ARGS` default `-p --output-format json`
+6. `RIM_PI_ARGS` default `--print --no-session --mode text`
+7. `RIM_PROVIDER_ORDER` default `pi,codex,claude`
+8. `RIM_PI_ONLY` default `0` (`1` disables Codex/Claude fallback)
 5. `RIM_CODEX_ENABLE_FEATURES` default `collab` (Codex experimental feature enabled by default)
 6. `RIM_CODEX_DISABLE_FEATURES` optional comma/space-separated disable list
 7. `RIM_PROVIDER_TIMEOUT_SEC` default `180`
@@ -413,10 +417,11 @@ Additional eval commands:
 1. `rim eval list` for saved report history.
 2. `rim eval compare --base <report_a> --target <report_b>` for time-over-time deltas (defaults to latest two reports when omitted).
 3. `rim eval baseline --limit 10 --save baseline.json` for deterministic single-pass baseline outputs.
-4. `rim eval baseline-llm --provider claude --mode deep --limit 10 --save baseline_claude.json` for a normal single-call Claude baseline.
-5. `rim eval baseline-llm --provider codex --mode deep --limit 10 --save baseline_codex.json` for a normal single-call Codex baseline.
+4. `rim eval baseline-llm --provider pi --mode deep --limit 10 --save baseline_pi.json` for a normal single-call PI baseline.
+5. `rim eval baseline-llm --provider claude --mode deep --limit 10 --save baseline_claude.json` for a normal single-call Claude baseline.
+6. `rim eval baseline-llm --provider codex --mode deep --limit 10 --save baseline_codex.json` for a normal single-call Codex baseline.
 6. `rim eval gate --base <report_a> --target <report_b> --min-quality-delta 0.0 --max-runtime-delta-sec 15` for pass/fail regression checks.
-7. `rim eval duel --mode deep --limit 10 --baseline-provider claude --min-quality-delta 0.0` to run single-call baseline + RIM benchmark and gate in one step (use `proxy` for legacy deterministic baseline).
+7. `rim eval duel --mode deep --limit 10 --baseline-provider pi --min-quality-delta 0.0` to run single-call baseline + RIM benchmark and gate in one step (use `proxy` for legacy deterministic baseline).
 8. `rim eval blindpack --report <report.json> --limit 20 --save blind_review.json` to generate anonymized review packets.
 9. `rim eval calibrate --report <report.json> --target-quality 0.65 --target-runtime-sec 60` to recommend depth-allocator env settings from benchmark signals.
 10. `rim eval calibrate-loop --mode deep --limit 10 --target-quality 0.65 --target-runtime-sec 60` to run benchmark + calibration in one step.

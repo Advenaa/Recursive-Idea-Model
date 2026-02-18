@@ -37,7 +37,7 @@ The repository now includes a Python MVP scaffold under `rim/` with:
 - Scored specialist spawning with tool-routing contracts (`rim/agents/spawner.py`)
 - Telemetry-driven specialist contract controller that auto-adjusts spawn role boosts from recent specialist arbitration outcomes (`rim/core/specialist_contract_quality.py`)
 - Persistent API job queue (resume queued/running jobs on restart) (`rim/api/job_queue.py`)
-- Provider adapters for `codex` and `claude` CLIs (`rim/providers/`)
+- Provider adapters for `pi`, `codex`, and `claude` CLIs (`rim/providers/`)
 - SQLite persistence + memory context reuse (`rim/storage/`)
 - Benchmark runner + canonical 20-idea dataset (`rim/eval/`)
 - Domain-weighted benchmark scoring + domain trend deltas (`rim/eval/runner.py`)
@@ -166,8 +166,10 @@ rim run logs <run_id>
 rim run feedback <run_id> --verdict accept --notes "Strong output"
 rim eval run --mode deep --limit 3
 rim eval baseline --limit 3
+rim eval baseline-llm --provider pi --mode deep --limit 3
 rim eval baseline-llm --provider claude --mode deep --limit 3
 rim eval baseline-llm --provider codex --mode deep --limit 3
+rim eval duel --mode deep --limit 3 --baseline-provider pi --min-quality-delta 0.0
 rim eval duel --mode deep --limit 3 --baseline-provider claude --min-quality-delta 0.0
 rim eval list
 rim eval compare
@@ -196,6 +198,11 @@ Provider env vars:
 ```bash
 export RIM_CODEX_CMD=codex
 export RIM_CODEX_ARGS="exec --skip-git-repo-check --sandbox read-only"
+export RIM_PI_CMD=pi
+export RIM_PI_ARGS="--print --no-session --mode text"
+export RIM_PROVIDER_ORDER="pi,codex,claude"
+# Set to 1 to force strict PI-only runtime (no codex/claude fallback)
+export RIM_PI_ONLY=0
 # Experimental Codex features (enabled by default: collab)
 export RIM_CODEX_ENABLE_FEATURES="collab"
 # Optional:
