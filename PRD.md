@@ -220,10 +220,8 @@ Each run must return JSON with this minimum schema:
 
 ## 16) Open Questions
 
-1. First domain focus for evaluation (general vs specific vertical)?
-2. Preferred LLM/provider stack for MVP implementation?
-3. Quality scoring rubric weights (rigor vs novelty vs practicality)?
-4. Minimum acceptable deep mode runtime for your workflow?
+1. None blocking for v0.2 PI migration.
+2. Next decision deferred to v0.3: whether to keep multi-provider fallback enabled by default or ship PI-only default (`RIM_PI_ONLY=1`) in production environments.
 
 ## 17) MVP Completion Record
 
@@ -231,7 +229,7 @@ Each run must return JSON with this minimum schema:
 - Completion date: February 14, 2026
 - Completion commit (main): `c938f09`
 - Validation at completion: `35` passing tests and successful compile checks
-- Latest validation snapshot (post-v0.2 + RL-light depth/arbitration/spawn/memory + engine modularization increments): `155` passing tests (`pytest -q`, February 17, 2026)
+- Latest validation snapshot (post PI-first runtime migration + PI-only mode + provider-surface updates): `163` passing tests (`pytest -q`, February 18, 2026)
 - Scope basis: v0.1 milestones (M1-M5) plus FR-8 (idempotent run control)
 
 ## 18) Acceptance Checklist
@@ -253,7 +251,7 @@ Each run must return JSON with this minimum schema:
 
 ## 19) Post-MVP Roadmap (v0.2)
 
-- PI-first core refactor: replace direct Codex/Claude provider orchestration with PI as the primary execution runtime across decomposition, critique, synthesis, and benchmark baselines (planned; starts February 18, 2026)
+- PI-first core refactor: replace direct Codex/Claude provider orchestration with PI as the primary execution runtime across decomposition, critique, synthesis, and benchmark baselines (done on February 18, 2026; includes `PiCLIAdapter`, PI-first default routing, strict PI-only mode via `RIM_PI_ONLY`, CLI/eval/schema/test/doc updates)
 - Replace heuristic scoring with a stronger domain-weighted rubric (done on February 14, 2026)
 - Finalize a canonical 20-idea benchmark pack and blind-review process (done on February 14, 2026; `rim eval blindpack`)
 - Add explicit run cancel/retry controls in API and CLI (done on February 14, 2026)
@@ -346,6 +344,7 @@ The MVP is complete for v0.1 scope, but full SOTA-paper parity is not yet comple
 ## 21) Refactor Directive: PI-First Runtime Replacement
 
 Status date: February 18, 2026
+Status: complete (v0.2 PI migration scope)
 
 Directive: perform a total model-execution refactor so PI is the main runtime substrate for RIM.
 
@@ -373,7 +372,16 @@ Directive: perform a total model-execution refactor so PI is the main runtime su
 
 ### 21.4 Delivery Phases
 
-1. Phase A: PRD + architecture alignment (this section) and provider contract updates.
-2. Phase B: PI adapter integration + router defaults + CLI/eval provider surfaces.
-3. Phase C: test suite updates for provider literals/order assumptions.
-4. Phase D: hardening, docs, and rollout guidance for PI subscription/API-key setups.
+1. Phase A: PRD + architecture alignment (this section) and provider contract updates. (done on February 18, 2026)
+2. Phase B: PI adapter integration + router defaults + CLI/eval provider surfaces. (done on February 18, 2026)
+3. Phase C: test suite updates for provider literals/order assumptions. (done on February 18, 2026)
+4. Phase D: hardening, docs, and rollout guidance for PI subscription/API-key setups. (done on February 18, 2026)
+
+### 21.5 Completion Evidence
+
+1. PI provider adapter added and wired as first-class runtime backend.
+2. Provider routing defaults switched to PI-first ordering with configurable `RIM_PROVIDER_ORDER`.
+3. Strict PI-only runtime mode implemented (`RIM_PI_ONLY=1`) to disable Codex/Claude fallback.
+4. Eval/CLI surfaces updated to accept PI for baseline workflows.
+5. Schema and provider assertions updated to support `provider="pi"`.
+6. Validation completed: full test suite passing (`163` tests, February 18, 2026).
