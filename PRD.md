@@ -385,3 +385,33 @@ Directive: perform a total model-execution refactor so PI is the main runtime su
 4. Eval/CLI surfaces updated to accept PI for baseline workflows.
 5. Schema and provider assertions updated to support `provider="pi"`.
 6. Validation completed: full test suite passing (`163` tests, February 18, 2026).
+
+## 22) SOTA Watchlist Update (from VoltAgent 2026 list)
+
+Status date: February 18, 2026
+
+This shortlist is prioritized for the next SOTA paper revision and v0.3-v0.5 execution planning.
+
+1. [ROMA: Recursive Open Meta-Agent Framework for Long-Horizon Multi-Agent Systems](https://arxiv.org/abs/2602.01848v1)
+   - RIM relevance: strengthens recursive long-horizon decomposition and subtask-tree execution strategy.
+2. [ORCH: many analyses, one merge - a deterministic multi-agent orchestrator](https://arxiv.org/abs/2602.01797v1)
+   - RIM relevance: aligns with deterministic multi-provider merge behavior and arbitration simplification.
+3. [Learning Latency-Aware Orchestration for Parallel Multi-Agent Systems](https://arxiv.org/abs/2601.10560v1)
+   - RIM relevance: informs runtime critical-path optimization for deep mode latency control.
+4. [Learning to Recommend Multi-Agent Subgraphs from Calling Trees](https://arxiv.org/abs/2601.22209v1)
+   - RIM relevance: directly maps to learned specialist spawning/routing from historical run telemetry.
+5. [BudgetMem: Learning Query-Aware Budget-Tier Routing for Runtime Agent Memory](https://arxiv.org/abs/2602.06025v1)
+   - RIM relevance: complements memory-quality controller with budget-aware memory retrieval tiers.
+6. [Learning to Share: Selective Memory for Efficient Parallel Agentic Systems](https://arxiv.org/abs/2602.05965v1)
+   - RIM relevance: improves parallel critic memory exchange without token bloat.
+7. [ProcMEM: Learning Reusable Procedural Memory from Experience via Non-Parametric PPO for LLM Agents](https://arxiv.org/abs/2602.01869v1)
+   - RIM relevance: supports reusable procedural memory artifacts for recurring reasoning patterns.
+8. [Replayable Financial Agents: A Determinism-Faithfulness Assurance Harness for Tool-Using LLM Agents](https://arxiv.org/abs/2601.15322v1)
+   - RIM relevance: adds a direct blueprint for deterministic trajectory replay and faithfulness checks.
+9. [AEMA: Verifiable Evaluation Framework for Trustworthy and Controlled Agentic LLM Systems](https://arxiv.org/abs/2601.11903v1)
+   - RIM relevance: strengthens process-aware auditable eval pipeline design.
+10. [AgenTRIM: Tool Risk Mitigation for Agentic AI](https://arxiv.org/abs/2601.12449v1)
+   - RIM relevance: maps to runtime least-privilege tool contracts and advanced verification hardening.
+
+Execution note:
+- Incorporate these references into the next SOTA manuscript revision (`rim_paper_5` target) and use them as priors for v0.3-v0.5 implementation scope updates.
